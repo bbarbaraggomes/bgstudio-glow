@@ -3,19 +3,18 @@ import { Link } from "react-router-dom";
 import { Calendar, MessageCircle, Plus, TrendingUp, UserPlus, Wallet } from "lucide-react";
 import { format, isToday, startOfWeek, addDays, isSameDay } from "date-fns";
 import { ptBR } from "date-fns/locale";
-import { useStorage } from "@/lib/storage";
-import { Appointment, Client, Service, Transaction, WhatsappLog } from "@/lib/types";
+import { useAppointments } from "@/lib/hooks/useAppointments";
+import { useFinancial } from "@/lib/hooks/useFinancial";
+import { useWhatsappLogs } from "@/lib/hooks/useWhatsappLogs";
 import { eur } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Avatar } from "@/components/Avatar";
 import { StatusBadge } from "@/components/StatusBadge";
 
 export default function DashboardPage() {
-  const [appointments] = useStorage<Appointment[]>("appointments", []);
-  const [clients] = useStorage<Client[]>("clients", []);
-  const [services] = useStorage<Service[]>("services", []);
-  const [transactions] = useStorage<Transaction[]>("transactions", []);
-  const [logs] = useStorage<WhatsappLog[]>("whatsapp_log", []);
+  const { appointments, loading } = useAppointments();
+  const { records: transactions } = useFinancial();
+  const { logs } = useWhatsappLogs();
 
   const todayStr = format(new Date(), "yyyy-MM-dd");
   const todayApts = useMemo(
@@ -25,7 +24,7 @@ export default function DashboardPage() {
   const todayRevenue = transactions
     .filter((t) => t.type === "income" && t.date === todayStr)
     .reduce((s, t) => s + t.amount, 0);
-  const remindersToday = logs.filter((l) => l.sentAt.startsWith(todayStr)).length;
+  const remindersToday = logs.filter((l) => l.sent_at.startsWith(todayStr)).length;
   const next = todayApts.find((a) => a.status !== "concluida" && a.status !== "cancelada");
 
   const weekStart = startOfWeek(new Date(), { weekStartsOn: 1 });
@@ -46,12 +45,20 @@ export default function DashboardPage() {
     {
       label: "Próxima cita",
       value: next ? `${next.time}` : "—",
-      sub: next ? clients.find((c) => c.id === next.clientId)?.name : "Sem citas",
+      sub: next ? (next.clients?.name ?? "—") : "Sem citas",
       icon: TrendingUp,
       accent: "text-[hsl(var(--warning))]",
     },
     { label: "Lembretes WhatsApp", value: remindersToday, icon: MessageCircle, accent: "text-[hsl(var(--success))]" },
   ];
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-24">
+        <p className="text-sm text-muted-foreground animate-pulse">A carregar...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-8">
@@ -124,24 +131,20 @@ export default function DashboardPage() {
             </div>
           ) : (
             <ul className="divide-y divide-[hsl(var(--border-solid))]">
-              {todayApts.map((a) => {
-                const c = clients.find((c) => c.id === a.clientId);
-                const s = services.find((s) => s.id === a.serviceId);
-                return (
-                  <li key={a.id} className="py-3 flex items-center gap-4">
-                    <div className="text-center w-14 shrink-0">
-                      <p className="text-display text-lg leading-none">{a.time}</p>
-                      <p className="text-[10px] text-muted-foreground uppercase mt-1">{a.duration}min</p>
-                    </div>
-                    <Avatar name={c?.name || "?"} size={38} />
-                    <div className="flex-1 min-w-0">
-                      <p className="font-medium truncate">{c?.name}</p>
-                      <p className="text-xs text-muted-foreground truncate">{s?.name}</p>
-                    </div>
-                    <StatusBadge status={a.status} />
-                  </li>
-                );
-              })}
+              {todayApts.map((a) => (
+                <li key={a.id} className="py-3 flex items-center gap-4">
+                  <div className="text-center w-14 shrink-0">
+                    <p className="text-display text-lg leading-none">{a.time}</p>
+                    <p className="text-[10px] text-muted-foreground uppercase mt-1">{a.services?.duration_min}min</p>
+                  </div>
+                  <Avatar name={a.clients?.name || "?"} size={38} />
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium truncate">{a.clients?.name}</p>
+                    <p className="text-xs text-muted-foreground truncate">{a.services?.name_pt}</p>
+                  </div>
+                  <StatusBadge status={a.status} />
+                </li>
+              ))}
             </ul>
           )}
         </div>
