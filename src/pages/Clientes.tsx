@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 import { Plus, Search, Phone, Calendar, Trash2 } from "lucide-react";
-import { useStorage, uid } from "@/lib/storage";
-import { Appointment, Client, Lang } from "@/lib/types";
+import { useClients } from "@/lib/hooks/useClients";
+import { useAppointments } from "@/lib/hooks/useAppointments";
+import { AppointmentRow, Client, Lang } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -15,8 +16,8 @@ import { format, parseISO } from "date-fns";
 import { ptBR } from "date-fns/locale";
 
 export default function ClientesPage() {
-  const [clients, setClients] = useStorage<Client[]>("clients", []);
-  const [appointments] = useStorage<Appointment[]>("appointments", []);
+  const { clients, loading, createClient, updateClient, deleteClient } = useClients();
+  const { appointments } = useAppointments();
   const [q, setQ] = useState("");
   const [sort, setSort] = useState<"name" | "recent" | "spent">("name");
   const [open, setOpen] = useState(false);
@@ -24,10 +25,10 @@ export default function ClientesPage() {
   const [detail, setDetail] = useState<Client | null>(null);
 
   const stats = (cId: string) => {
-    const ap = appointments.filter((a) => a.clientId === cId);
+    const ap = appointments.filter((a) => a.client_id === cId);
     const done = ap.filter((a) => a.status === "concluida");
-    const totalSpent = done.reduce((s, a) => s + a.price, 0);
-    const last = ap.sort((a, b) => (a.date < b.date ? 1 : -1))[0];
+    const totalSpent = done.reduce((s, a) => s + (a.services?.price || 0), 0);
+    const last = [...ap].sort((a, b) => (a.date < b.date ? 1 : -1))[0];
     return { count: ap.length, totalSpent, last: last?.date };
   };
 
@@ -45,22 +46,32 @@ export default function ClientesPage() {
   const openNew = () => { setEditing(null); setOpen(true); };
   const openEdit = (c: Client) => { setEditing(c); setOpen(true); };
 
-  const save = (data: Omit<Client, "id" | "createdAt"> & { id?: string }) => {
+  const save = async (data: Partial<Client> & { id?: string }) => {
     if (data.id) {
-      setClients((arr) => arr.map((c) => (c.id === data.id ? { ...c, ...data } as Client : c)));
-      toast.success("Cliente atualizada");
+      const ok = await updateClient(data.id, { name: data.name!, phone: data.phone!, email: data.email, language: data.language!, notes: data.notes });
+      if (ok) toast.success("Cliente atualizada");
     } else {
-      setClients((arr) => [...arr, { ...data, id: uid(), createdAt: new Date().toISOString() }]);
-      toast.success("Cliente cadastrada ✨");
+      const ok = await createClient({ name: data.name!, phone: data.phone!, email: data.email, language: data.language!, notes: data.notes });
+      if (ok) toast.success("Cliente cadastrada ✨");
     }
     setOpen(false);
   };
 
-  const remove = (c: Client) => {
-    setClients((arr) => arr.filter((x) => x.id !== c.id));
-    setDetail(null);
-    toast.success("Cliente removida");
+  const remove = async (c: Client) => {
+    const ok = await deleteClient(c.id);
+    if (ok) {
+      setDetail(null);
+      toast.success("Cliente removida");
+    }
   };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-24">
+        <p className="text-sm text-muted-foreground animate-pulse">A carregar clientes...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -100,9 +111,9 @@ export default function ClientesPage() {
                 <Avatar name={c.name} size={48} />
                 <div className="flex-1 min-w-0">
                   <p className="font-medium truncate">{c.name}</p>
-                  <p className="text-xs text-muted-foreground">{c.countryCode} {c.phone}</p>
+                  <p className="text-xs text-muted-foreground">{c.phone}</p>
                 </div>
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-secondary">{c.lang}</span>
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-secondary">{c.language}</span>
               </div>
               <div className="mt-4 pt-4 border-t border-[hsl(var(--border-solid))] grid grid-cols-3 gap-2 text-center">
                 <div>
@@ -141,7 +152,7 @@ function ClientDialog({
   const [form, setForm] = useState<Partial<Client>>({});
   useMemo(() => {
     if (open) {
-      setForm(editing || { countryCode: "+34", lang: "ES" });
+      setForm(editing || { language: "ES" });
     }
   }, [open]);
 
@@ -159,35 +170,17 @@ function ClientDialog({
             <Label>Nome completo</Label>
             <Input value={form.name || ""} onChange={(e) => setForm({ ...form, name: e.target.value })} className="rounded-lg" />
           </div>
-          <div className="grid grid-cols-[110px_1fr] gap-2">
-            <div>
-              <Label>País</Label>
-              <Select value={form.countryCode} onValueChange={(v: "+34" | "+55") => setForm({ ...form, countryCode: v })}>
-                <SelectTrigger className="rounded-lg"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="+34">🇪🇸 +34</SelectItem>
-                  <SelectItem value="+55">🇧🇷 +55</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label>Telefone (WhatsApp)</Label>
-              <Input value={form.phone || ""} onChange={(e) => setForm({ ...form, phone: e.target.value })} className="rounded-lg" />
-            </div>
+          <div>
+            <Label>Telefone WhatsApp (com código do país)</Label>
+            <Input placeholder="+34 698 108 173 ou +55 11 98765 4321" value={form.phone || ""} onChange={(e) => setForm({ ...form, phone: e.target.value })} className="rounded-lg" />
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <Label>Email</Label>
-              <Input type="email" value={form.email || ""} onChange={(e) => setForm({ ...form, email: e.target.value })} className="rounded-lg" />
-            </div>
-            <div>
-              <Label>Aniversário</Label>
-              <Input type="date" value={form.birthdate || ""} onChange={(e) => setForm({ ...form, birthdate: e.target.value })} className="rounded-lg" />
-            </div>
+          <div>
+            <Label>Email</Label>
+            <Input type="email" value={form.email || ""} onChange={(e) => setForm({ ...form, email: e.target.value })} className="rounded-lg" />
           </div>
           <div>
             <Label>Idioma das mensagens</Label>
-            <Select value={form.lang} onValueChange={(v: Lang) => setForm({ ...form, lang: v })}>
+            <Select value={form.language} onValueChange={(v: Lang) => setForm({ ...form, language: v })}>
               <SelectTrigger className="rounded-lg"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="PT">Português (PT-BR)</SelectItem>
@@ -212,14 +205,14 @@ function ClientDialog({
 function ClientDetail({
   client, onClose, appointments, onEdit, onDelete,
 }: {
-  client: Client | null; onClose: () => void; appointments: Appointment[];
+  client: Client | null; onClose: () => void; appointments: AppointmentRow[];
   onEdit: (c: Client) => void; onDelete: (c: Client) => void;
 }) {
   if (!client) return null;
-  const ap = appointments.filter((a) => a.clientId === client.id).sort((a, b) => (a.date < b.date ? 1 : -1));
+  const ap = appointments.filter((a) => a.client_id === client.id).sort((a, b) => (a.date < b.date ? 1 : -1));
   const done = ap.filter((a) => a.status === "concluida");
-  const totalSpent = done.reduce((s, a) => s + a.price, 0);
-  const waUrl = `https://wa.me/${(client.countryCode + client.phone).replace(/\D/g, "")}`;
+  const totalSpent = done.reduce((s, a) => s + (a.services?.price || 0), 0);
+  const waUrl = `https://wa.me/${client.phone.replace(/\D/g, "")}`;
 
   return (
     <Dialog open={!!client} onOpenChange={(v) => !v && onClose()}>
@@ -229,7 +222,7 @@ function ClientDetail({
           <Avatar name={client.name} size={64} />
           <div className="flex-1">
             <h3 className="text-display text-2xl">{client.name}</h3>
-            <p className="text-sm text-muted-foreground">{client.countryCode} {client.phone} · {client.lang}</p>
+            <p className="text-sm text-muted-foreground">{client.phone} · {client.language}</p>
           </div>
         </div>
 
@@ -263,7 +256,7 @@ function ClientDetail({
               <li key={a.id} className="flex justify-between text-xs py-2 border-b border-[hsl(var(--border-solid))]">
                 <span>{format(parseISO(a.date), "dd/MM/yyyy", { locale: ptBR })} · {a.time}</span>
                 <span className="text-muted-foreground capitalize">{a.status}</span>
-                <span>{eur(a.price)}</span>
+                <span>{eur(a.services?.price || 0)}</span>
               </li>
             ))}
           </ul>

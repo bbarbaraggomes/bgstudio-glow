@@ -2,8 +2,11 @@ import { useMemo, useState } from "react";
 import { addDays, addMonths, endOfMonth, format, isSameDay, isSameMonth, parseISO, startOfMonth, startOfWeek, subMonths } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
-import { useStorage, uid } from "@/lib/storage";
-import { Appointment, Client, Service, AppointmentStatus } from "@/lib/types";
+import { useAppointments } from "@/lib/hooks/useAppointments";
+import { useClients } from "@/lib/hooks/useClients";
+import { useServices } from "@/lib/hooks/useServices";
+import { useFinancial } from "@/lib/hooks/useFinancial";
+import { Appointment, AppointmentRow, AppointmentStatus, Client, Service } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -19,14 +22,15 @@ import { toast } from "sonner";
 type View = "month" | "week" | "day";
 
 export default function AgendaPage() {
-  const [appointments, setAppointments] = useStorage<Appointment[]>("appointments", []);
-  const [clients] = useStorage<Client[]>("clients", []);
-  const [services] = useStorage<Service[]>("services", []);
+  const { appointments, loading, createAppointment, updateAppointment, deleteAppointment } = useAppointments();
+  const { clients } = useClients();
+  const { activeServices: services } = useServices();
+  const { createRecord } = useFinancial();
 
   const [cursor, setCursor] = useState(new Date());
   const [view, setView] = useState<View>("month");
   const [open, setOpen] = useState(false);
-  const [editing, setEditing] = useState<Appointment | null>(null);
+  const [editing, setEditing] = useState<AppointmentRow | null>(null);
   const [presetDate, setPresetDate] = useState<string | null>(null);
 
   const monthDays = useMemo(() => {
@@ -57,62 +61,63 @@ export default function AgendaPage() {
     setOpen(true);
   };
 
-  const openEdit = (a: Appointment) => {
+  const openEdit = (a: AppointmentRow) => {
     setEditing(a);
     setPresetDate(null);
     setOpen(true);
   };
 
-  const saveApt = (data: Partial<Appointment>) => {
+  const saveApt = async (data: Partial<Appointment>) => {
     if (editing) {
-      setAppointments((arr) => arr.map((a) => (a.id === editing.id ? { ...a, ...data } as Appointment : a)));
-      toast.success("Cita atualizada");
+      const ok = await updateAppointment(editing.id, data);
+      if (ok) toast.success("Cita atualizada");
     } else {
-      const svc = services.find((s) => s.id === data.serviceId);
-      const newApt: Appointment = {
-        id: uid(),
-        clientId: data.clientId!,
-        serviceId: data.serviceId!,
+      const ok = await createAppointment({
+        client_id: data.client_id!,
+        service_id: data.service_id!,
         date: data.date!,
         time: data.time!,
-        duration: svc?.duration || 60,
-        price: svc?.price || 0,
         status: "agendada",
-        whatsappReminder: data.whatsappReminder ?? true,
+        reminder_sent: data.reminder_sent ?? true,
         notes: data.notes,
-      };
-      setAppointments((arr) => [...arr, newApt]);
-      toast.success("Cita criada com sucesso ✨");
+      });
+      if (ok) toast.success("Cita criada com sucesso ✨");
     }
     setOpen(false);
   };
 
-  const setStatus = (a: Appointment, status: AppointmentStatus) => {
-    setAppointments((arr) => arr.map((x) => (x.id === a.id ? { ...x, status } : x)));
+  const setStatus = async (a: AppointmentRow, status: AppointmentStatus) => {
+    await updateAppointment(a.id, { status });
     if (status === "concluida") {
-      // auto-launch financial
-      const tx = JSON.parse(localStorage.getItem("bgstudio:transactions") || "[]");
-      const svc = services.find((s) => s.id === a.serviceId);
-      tx.push({
-        id: uid(),
+      await createRecord({
         type: "income",
-        appointmentId: a.id,
-        serviceName: svc?.name,
-        amount: a.price,
-        paymentMethod: a.paymentMethod || "Dinheiro",
+        amount: a.services?.price || 0,
+        description: a.services?.name_pt || "Serviço",
+        service_id: a.service_id,
+        appointment_id: a.id,
         date: a.date,
       });
-      localStorage.setItem("bgstudio:transactions", JSON.stringify(tx));
-      window.dispatchEvent(new CustomEvent("bgstudio:update", { detail: { key: "transactions" } }));
       toast.success("Cita concluída · lançamento criado");
+    } else {
+      toast.success("Status atualizado");
     }
   };
 
-  const removeApt = (a: Appointment) => {
-    setAppointments((arr) => arr.filter((x) => x.id !== a.id));
-    setOpen(false);
-    toast.success("Cita removida");
+  const removeApt = async (a: AppointmentRow) => {
+    const ok = await deleteAppointment(a.id);
+    if (ok) {
+      setOpen(false);
+      toast.success("Cita removida");
+    }
   };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-24">
+        <p className="text-sm text-muted-foreground animate-pulse">A carregar agenda...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -175,18 +180,15 @@ export default function AgendaPage() {
                     {apts.length > 0 && <span className="text-[10px] text-primary">{apts.length}</span>}
                   </div>
                   <div className="space-y-0.5">
-                    {apts.slice(0, 2).map((a) => {
-                      const c = clients.find((c) => c.id === a.clientId);
-                      return (
-                        <div
-                          key={a.id}
-                          onClick={(e) => { e.stopPropagation(); openEdit(a); }}
-                          className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-foreground truncate"
-                        >
-                          {a.time} {c?.name?.split(" ")[0]}
-                        </div>
-                      );
-                    })}
+                    {apts.slice(0, 2).map((a) => (
+                      <div
+                        key={a.id}
+                        onClick={(e) => { e.stopPropagation(); openEdit(a); }}
+                        className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-foreground truncate"
+                      >
+                        {a.time} {a.clients?.name?.split(" ")[0]}
+                      </div>
+                    ))}
                     {apts.length > 2 && <div className="text-[10px] text-muted-foreground">+{apts.length - 2}</div>}
                   </div>
                 </button>
@@ -210,16 +212,12 @@ export default function AgendaPage() {
                   </div>
                   <div className="space-y-1.5 min-h-[40px]">
                     {apts.length === 0 && <button onClick={() => openNew(d)} className="text-[11px] text-muted-foreground hover:text-primary">+ Adicionar</button>}
-                    {apts.map((a) => {
-                      const c = clients.find((c) => c.id === a.clientId);
-                      const s = services.find((s) => s.id === a.serviceId);
-                      return (
-                        <button key={a.id} onClick={() => openEdit(a)} className="w-full text-left p-2 rounded-lg bg-secondary/60 hover:bg-secondary transition-colors">
-                          <p className="text-xs font-medium">{a.time} · {c?.name?.split(" ")[0]}</p>
-                          <p className="text-[10px] text-muted-foreground truncate">{s?.name}</p>
-                        </button>
-                      );
-                    })}
+                    {apts.map((a) => (
+                      <button key={a.id} onClick={() => openEdit(a)} className="w-full text-left p-2 rounded-lg bg-secondary/60 hover:bg-secondary transition-colors">
+                        <p className="text-xs font-medium">{a.time} · {a.clients?.name?.split(" ")[0]}</p>
+                        <p className="text-[10px] text-muted-foreground truncate">{a.services?.name_pt}</p>
+                      </button>
+                    ))}
                   </div>
                 </div>
               );
@@ -238,25 +236,21 @@ export default function AgendaPage() {
             </div>
           ) : (
             <ul className="space-y-2">
-              {aptsByDay(cursor).map((a) => {
-                const c = clients.find((c) => c.id === a.clientId);
-                const s = services.find((s) => s.id === a.serviceId);
-                return (
-                  <li key={a.id} className="flex items-center gap-4 p-4 rounded-xl border border-[hsl(var(--border))] hover:border-primary/40 transition-colors">
-                    <div className="text-center w-16 shrink-0">
-                      <p className="text-display text-2xl leading-none">{a.time}</p>
-                      <p className="text-[10px] uppercase text-muted-foreground mt-1">{a.duration}min</p>
-                    </div>
-                    <Avatar name={c?.name || "?"} size={42} />
-                    <div className="flex-1 min-w-0">
-                      <p className="font-medium">{c?.name}</p>
-                      <p className="text-xs text-muted-foreground">{s?.name} · {eur(a.price)}</p>
-                    </div>
-                    <StatusBadge status={a.status} />
-                    <Button variant="outline" size="sm" onClick={() => openEdit(a)} className="rounded-lg">Editar</Button>
-                  </li>
-                );
-              })}
+              {aptsByDay(cursor).map((a) => (
+                <li key={a.id} className="flex items-center gap-4 p-4 rounded-xl border border-[hsl(var(--border))] hover:border-primary/40 transition-colors">
+                  <div className="text-center w-16 shrink-0">
+                    <p className="text-display text-2xl leading-none">{a.time}</p>
+                    <p className="text-[10px] uppercase text-muted-foreground mt-1">{a.services?.duration_min}min</p>
+                  </div>
+                  <Avatar name={a.clients?.name || "?"} size={42} />
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium">{a.clients?.name}</p>
+                    <p className="text-xs text-muted-foreground">{a.services?.name_pt} · {eur(a.services?.price || 0)}</p>
+                  </div>
+                  <StatusBadge status={a.status} />
+                  <Button variant="outline" size="sm" onClick={() => openEdit(a)} className="rounded-lg">Editar</Button>
+                </li>
+              ))}
             </ul>
           )}
         </div>
@@ -282,33 +276,30 @@ function AppointmentDialog({
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
-  editing: Appointment | null;
+  editing: AppointmentRow | null;
   presetDate: string | null;
   clients: Client[];
   services: Service[];
   onSave: (data: Partial<Appointment>) => void;
-  onDelete: (a: Appointment) => void;
-  onStatus: (a: Appointment, s: AppointmentStatus) => void;
+  onDelete: (a: AppointmentRow) => void;
+  onStatus: (a: AppointmentRow, s: AppointmentStatus) => void;
 }) {
-  const [clientId, setClientId] = useState("");
-  const [serviceId, setServiceId] = useState("");
+  const [client_id, setClientId] = useState("");
+  const [service_id, setServiceId] = useState("");
   const [date, setDate] = useState("");
   const [time, setTime] = useState("10:00");
   const [notes, setNotes] = useState("");
   const [reminder, setReminder] = useState(true);
 
-  useState(() => {});
-
-  // Reset on open
   useMemo(() => {
     if (open) {
       if (editing) {
-        setClientId(editing.clientId);
-        setServiceId(editing.serviceId);
+        setClientId(editing.client_id);
+        setServiceId(editing.service_id);
         setDate(editing.date);
         setTime(editing.time);
         setNotes(editing.notes || "");
-        setReminder(editing.whatsappReminder);
+        setReminder(editing.reminder_sent);
       } else {
         setClientId("");
         setServiceId("");
@@ -321,11 +312,11 @@ function AppointmentDialog({
   }, [open]);
 
   const submit = () => {
-    if (!clientId || !serviceId || !date || !time) {
+    if (!client_id || !service_id || !date || !time) {
       toast.error("Preencha cliente, serviço, data e horário");
       return;
     }
-    onSave({ clientId, serviceId, date, time, notes, whatsappReminder: reminder });
+    onSave({ client_id, service_id, date, time, notes, reminder_sent: reminder });
   };
 
   return (
@@ -337,19 +328,19 @@ function AppointmentDialog({
         <div className="space-y-4">
           <div>
             <Label>Cliente</Label>
-            <Select value={clientId} onValueChange={setClientId}>
+            <Select value={client_id} onValueChange={setClientId}>
               <SelectTrigger className="rounded-lg"><SelectValue placeholder="Selecionar cliente" /></SelectTrigger>
               <SelectContent>
-                {clients.map((c) => <SelectItem key={c.id} value={c.id}>{c.name} · {c.countryCode}{c.phone}</SelectItem>)}
+                {clients.map((c) => <SelectItem key={c.id} value={c.id}>{c.name} · {c.phone}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
           <div>
             <Label>Serviço</Label>
-            <Select value={serviceId} onValueChange={setServiceId}>
+            <Select value={service_id} onValueChange={setServiceId}>
               <SelectTrigger className="rounded-lg"><SelectValue placeholder="Selecionar serviço" /></SelectTrigger>
               <SelectContent>
-                {services.filter((s) => s.active).map((s) => <SelectItem key={s.id} value={s.id}>{s.name} · {s.duration}min · {eur(s.price)}</SelectItem>)}
+                {services.map((s) => <SelectItem key={s.id} value={s.id}>{s.name_pt} · {s.duration_min}min · {eur(s.price)}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
@@ -370,7 +361,7 @@ function AppointmentDialog({
           <div className="flex items-center justify-between p-3 rounded-lg bg-secondary/50">
             <div>
               <Label className="cursor-pointer">Lembrete WhatsApp 24h antes</Label>
-              <p className="text-[11px] text-muted-foreground">Enviado automaticamente via Wassenger</p>
+              <p className="text-[11px] text-muted-foreground">Enviado automaticamente via Twilio</p>
             </div>
             <Switch checked={reminder} onCheckedChange={setReminder} />
           </div>

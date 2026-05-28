@@ -1,7 +1,9 @@
 import { useMemo, useState } from "react";
 import { Plus, TrendingDown, TrendingUp, Wallet } from "lucide-react";
-import { useStorage, uid } from "@/lib/storage";
-import { Appointment, ExpenseCategory, PaymentMethod, Service, Transaction } from "@/lib/types";
+import { useFinancial } from "@/lib/hooks/useFinancial";
+import { useServices } from "@/lib/hooks/useServices";
+import { useAppointments } from "@/lib/hooks/useAppointments";
+import { FinancialRecord, Service } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -14,14 +16,12 @@ import { format, parseISO, startOfMonth, subMonths, endOfMonth, isWithinInterval
 import { ptBR } from "date-fns/locale";
 import { Bar, BarChart, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
-const CATS: ExpenseCategory[] = ["Material", "Aluguel", "Marketing", "Curso", "Outro"];
-const METHODS: PaymentMethod[] = ["Dinheiro", "Bizum", "Cartão", "Transferência"];
 const PIE_COLORS = ["#C9A96E", "#A07840", "#E8B86D", "#7DAB8B", "#F2DDD6", "#8C7B74"];
 
 export default function FinanceiroPage() {
-  const [transactions, setTransactions] = useStorage<Transaction[]>("transactions", []);
-  const [appointments] = useStorage<Appointment[]>("appointments", []);
-  const [services] = useStorage<Service[]>("services", []);
+  const { records, loading, createRecord, deleteRecord } = useFinancial();
+  const { appointments } = useAppointments();
+  const { services } = useServices();
   const [open, setOpen] = useState<"income" | "expense" | null>(null);
 
   const now = new Date();
@@ -32,8 +32,8 @@ export default function FinanceiroPage() {
     return isWithinInterval(date, { start: monthStart, end: monthEnd });
   };
 
-  const monthIncome = transactions.filter((t) => t.type === "income" && inMonth(t.date)).reduce((s, t) => s + t.amount, 0);
-  const monthExpense = transactions.filter((t) => t.type === "expense" && inMonth(t.date)).reduce((s, t) => s + t.amount, 0);
+  const monthIncome = records.filter((t) => t.type === "income" && inMonth(t.date)).reduce((s, t) => s + t.amount, 0);
+  const monthExpense = records.filter((t) => t.type === "expense" && inMonth(t.date)).reduce((s, t) => s + t.amount, 0);
   const profit = monthIncome - monthExpense;
   const monthApts = appointments.filter((a) => inMonth(a.date)).length;
 
@@ -41,25 +41,25 @@ export default function FinanceiroPage() {
     return Array.from({ length: 6 }, (_, i) => {
       const d = subMonths(now, 5 - i);
       const ms = startOfMonth(d), me = endOfMonth(d);
-      const inv = transactions
+      const inv = records
         .filter((t) => t.type === "income" && isWithinInterval(parseISO(t.date), { start: ms, end: me }))
         .reduce((s, t) => s + t.amount, 0);
       return { month: format(d, "MMM", { locale: ptBR }), value: inv };
     });
-  }, [transactions]);
+  }, [records]);
 
   const serviceData = useMemo(() => {
     const map: Record<string, number> = {};
-    transactions.filter((t) => t.type === "income").forEach((t) => {
-      const k = t.serviceName || "Outros";
+    records.filter((t) => t.type === "income").forEach((t) => {
+      const k = t.services?.name_pt || t.description || "Outros";
       map[k] = (map[k] || 0) + t.amount;
     });
     return Object.entries(map).map(([name, value]) => ({ name, value }));
-  }, [transactions]);
+  }, [records]);
 
-  const remove = (id: string) => {
-    setTransactions((arr) => arr.filter((t) => t.id !== id));
-    toast.success("Lançamento removido");
+  const remove = async (id: string) => {
+    const ok = await deleteRecord(id);
+    if (ok) toast.success("Lançamento removido");
   };
 
   const KPIS = [
@@ -68,6 +68,14 @@ export default function FinanceiroPage() {
     { label: "Lucro líquido", value: eur(profit), icon: Wallet, color: "text-primary" },
     { label: "Citas no mês", value: monthApts, icon: TrendingUp, color: "text-[hsl(var(--warning))]" },
   ];
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-24">
+        <p className="text-sm text-muted-foreground animate-pulse">A carregar financeiro...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -139,8 +147,8 @@ export default function FinanceiroPage() {
           </div>
           {(["all", "income", "expense"] as const).map((tab) => (
             <TabsContent key={tab} value={tab}>
-              <TransactionTable
-                items={transactions
+              <RecordTable
+                items={records
                   .filter((t) => tab === "all" || t.type === tab)
                   .sort((a, b) => (a.date < b.date ? 1 : -1))}
                 onDelete={remove}
@@ -150,12 +158,21 @@ export default function FinanceiroPage() {
         </Tabs>
       </div>
 
-      <TxDialog open={!!open} type={open} onOpenChange={() => setOpen(null)} services={services} appointments={appointments} onSave={(t) => { setTransactions((arr) => [...arr, t]); setOpen(null); toast.success("Lançamento criado"); }} />
+      <TxDialog
+        open={!!open}
+        type={open}
+        onOpenChange={() => setOpen(null)}
+        services={services}
+        onSave={async (t) => {
+          const ok = await createRecord(t);
+          if (ok) { setOpen(null); toast.success("Lançamento criado"); }
+        }}
+      />
     </div>
   );
 }
 
-function TransactionTable({ items, onDelete }: { items: Transaction[]; onDelete: (id: string) => void }) {
+function RecordTable({ items, onDelete }: { items: FinancialRecord[]; onDelete: (id: string) => void }) {
   if (items.length === 0) return <p className="text-sm text-muted-foreground py-12 text-center">Nenhum lançamento</p>;
   return (
     <div className="overflow-x-auto">
@@ -164,8 +181,7 @@ function TransactionTable({ items, onDelete }: { items: Transaction[]; onDelete:
           <tr className="text-left text-xs uppercase tracking-wider text-muted-foreground border-b border-[hsl(var(--border-solid))]">
             <th className="py-3">Data</th>
             <th>Descrição</th>
-            <th>Categoria</th>
-            <th>Pagamento</th>
+            <th>Tipo</th>
             <th className="text-right">Valor</th>
             <th></th>
           </tr>
@@ -174,9 +190,8 @@ function TransactionTable({ items, onDelete }: { items: Transaction[]; onDelete:
           {items.map((t) => (
             <tr key={t.id} className="border-b border-[hsl(var(--border-solid))] hover:bg-secondary/30 transition-colors">
               <td className="py-3 text-muted-foreground">{format(parseISO(t.date), "dd/MM/yy")}</td>
-              <td>{t.serviceName || t.description || "—"}</td>
-              <td className="text-muted-foreground">{t.category || (t.type === "income" ? "Serviço" : "—")}</td>
-              <td className="text-muted-foreground">{t.paymentMethod || "—"}</td>
+              <td>{t.services?.name_pt || t.description || "—"}</td>
+              <td className="text-muted-foreground">{t.type === "income" ? "Receita" : "Despesa"}</td>
               <td className={`text-right font-medium ${t.type === "income" ? "text-[hsl(var(--success))]" : "text-destructive"}`}>
                 {t.type === "income" ? "+" : "-"} {eur(t.amount)}
               </td>
@@ -190,29 +205,35 @@ function TransactionTable({ items, onDelete }: { items: Transaction[]; onDelete:
 }
 
 function TxDialog({
-  open, type, onOpenChange, services, appointments, onSave,
+  open, type, onOpenChange, services, onSave,
 }: {
   open: boolean; type: "income" | "expense" | null; onOpenChange: (v: boolean) => void;
-  services: Service[]; appointments: Appointment[];
-  onSave: (t: Transaction) => void;
+  services: Service[];
+  onSave: (t: Omit<FinancialRecord, "id" | "created_at" | "services">) => void;
 }) {
-  const [form, setForm] = useState<Partial<Transaction>>({});
+  const [serviceId, setServiceId] = useState("");
+  const [description, setDescription] = useState("");
+  const [amount, setAmount] = useState<number | "">("");
+  const [date, setDate] = useState(format(new Date(), "yyyy-MM-dd"));
+
   useMemo(() => {
-    if (open) setForm({ date: format(new Date(), "yyyy-MM-dd"), paymentMethod: "Dinheiro" });
+    if (open) {
+      setServiceId("");
+      setDescription("");
+      setAmount("");
+      setDate(format(new Date(), "yyyy-MM-dd"));
+    }
   }, [open]);
 
   const submit = () => {
-    if (!form.amount || form.amount <= 0) return toast.error("Valor obrigatório");
+    if (!amount || Number(amount) <= 0) return toast.error("Valor obrigatório");
+    const svc = services.find((s) => s.id === serviceId);
     onSave({
-      id: uid(),
       type: type!,
-      amount: Number(form.amount),
-      date: form.date!,
-      serviceName: form.serviceName,
-      paymentMethod: form.paymentMethod,
-      category: form.category,
-      description: form.description,
-      appointmentId: form.appointmentId,
+      amount: Number(amount),
+      date,
+      description: svc ? svc.name_pt : description || undefined,
+      service_id: serviceId || undefined,
     });
   };
 
@@ -222,47 +243,29 @@ function TxDialog({
         <DialogHeader><DialogTitle className="font-display text-2xl">{type === "income" ? "Nova receita" : "Nova despesa"}</DialogTitle></DialogHeader>
         <div className="space-y-3">
           {type === "income" ? (
-            <>
-              <div>
-                <Label>Serviço</Label>
-                <Select value={form.serviceName} onValueChange={(v) => setForm({ ...form, serviceName: v })}>
-                  <SelectTrigger className="rounded-lg"><SelectValue placeholder="Selecionar serviço" /></SelectTrigger>
-                  <SelectContent>
-                    {services.map((s) => <SelectItem key={s.id} value={s.name}>{s.name}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label>Forma de pagamento</Label>
-                <Select value={form.paymentMethod} onValueChange={(v: PaymentMethod) => setForm({ ...form, paymentMethod: v })}>
-                  <SelectTrigger className="rounded-lg"><SelectValue /></SelectTrigger>
-                  <SelectContent>{METHODS.map((m) => <SelectItem key={m} value={m}>{m}</SelectItem>)}</SelectContent>
-                </Select>
-              </div>
-            </>
+            <div>
+              <Label>Serviço</Label>
+              <Select value={serviceId} onValueChange={setServiceId}>
+                <SelectTrigger className="rounded-lg"><SelectValue placeholder="Selecionar serviço" /></SelectTrigger>
+                <SelectContent>
+                  {services.map((s) => <SelectItem key={s.id} value={s.id}>{s.name_pt}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
           ) : (
-            <>
-              <div>
-                <Label>Categoria</Label>
-                <Select value={form.category} onValueChange={(v: ExpenseCategory) => setForm({ ...form, category: v })}>
-                  <SelectTrigger className="rounded-lg"><SelectValue placeholder="Selecionar" /></SelectTrigger>
-                  <SelectContent>{CATS.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label>Descrição</Label>
-                <Input value={form.description || ""} onChange={(e) => setForm({ ...form, description: e.target.value })} className="rounded-lg" />
-              </div>
-            </>
+            <div>
+              <Label>Descrição</Label>
+              <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Ex: Esmaltes OPI" className="rounded-lg" />
+            </div>
           )}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label>Valor (€)</Label>
-              <Input type="number" step="0.01" value={form.amount || ""} onChange={(e) => setForm({ ...form, amount: Number(e.target.value) })} className="rounded-lg" />
+              <Input type="number" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value ? Number(e.target.value) : "")} className="rounded-lg" />
             </div>
             <div>
               <Label>Data</Label>
-              <Input type="date" value={form.date || ""} onChange={(e) => setForm({ ...form, date: e.target.value })} className="rounded-lg" />
+              <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="rounded-lg" />
             </div>
           </div>
           <div className="flex justify-end gap-2 pt-2">

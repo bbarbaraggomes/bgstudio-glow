@@ -1,7 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Eye, EyeOff, Plus, Trash2 } from "lucide-react";
-import { useStorage, uid } from "@/lib/storage";
-import { Lang, Service, Settings } from "@/lib/types";
+import { useSettings } from "@/lib/hooks/useSettings";
+import { useServices } from "@/lib/hooks/useServices";
+import { useStorage } from "@/lib/storage";
+import { Lang, Service } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -20,20 +22,80 @@ const DAYS = [
   { key: "sunday", label: "Domingo" },
 ];
 
+const DEFAULT_HOURS = {
+  monday: { enabled: true, start: "09:00", end: "19:00" },
+  tuesday: { enabled: true, start: "09:00", end: "19:00" },
+  wednesday: { enabled: true, start: "09:00", end: "19:00" },
+  thursday: { enabled: true, start: "09:00", end: "19:00" },
+  friday: { enabled: true, start: "09:00", end: "19:00" },
+  saturday: { enabled: true, start: "10:00", end: "16:00" },
+  sunday: { enabled: false, start: "10:00", end: "14:00" },
+};
+
 export default function ConfiguracoesPage() {
-  const [settings, setSettings] = useStorage<Settings>("settings", {} as Settings);
-  const [services, setServices] = useStorage<Service[]>("services", []);
-  const [showKey, setShowKey] = useState(false);
-  const [newSvc, setNewSvc] = useState<Partial<Service>>({ duration: 60, price: 30, active: true });
+  const { settings, loading, updateSettings } = useSettings();
+  const { services, createService, updateService, deleteService } = useServices();
 
-  const update = (patch: Partial<Settings>) => setSettings((s) => ({ ...s, ...patch }));
+  // Horários e preferências locais (não estão na tabela Supabase)
+  const [workingHours, setWorkingHours] = useStorage<Record<string, { enabled: boolean; start: string; end: string }>>("workingHours", DEFAULT_HOURS);
+  const [intervalBetween, setIntervalBetween] = useStorage<number>("intervalBetween", 15);
+  const [defaultLang, setDefaultLang] = useStorage<Lang>("defaultLang", "PT");
 
-  const addService = () => {
-    if (!newSvc.name) return toast.error("Nome do serviço obrigatório");
-    setServices((arr) => [...arr, { id: uid(), name: newSvc.name!, duration: Number(newSvc.duration) || 60, price: Number(newSvc.price) || 0, active: true }]);
-    setNewSvc({ duration: 60, price: 30, active: true });
-    toast.success("Serviço adicionado");
+  // Estado local para campos Supabase
+  const [studioName, setStudioName] = useState("");
+  const [whatsappNumber, setWhatsappNumber] = useState("");
+  const [twilioSid, setTwilioSid] = useState("");
+  const [twilioToken, setTwilioToken] = useState("");
+  const [reminderTime, setReminderTime] = useState("10:00");
+  const [showSid, setShowSid] = useState(false);
+  const [showToken, setShowToken] = useState(false);
+
+  const [newSvc, setNewSvc] = useState<Partial<Service>>({ duration_min: 60, price: 30, active: true });
+
+  useEffect(() => {
+    if (settings) {
+      setStudioName(settings.studio_name || "");
+      setWhatsappNumber(settings.whatsapp_number || "");
+      setTwilioSid(settings.twilio_sid || "");
+      setTwilioToken(settings.twilio_token || "");
+      setReminderTime(settings.reminder_time || "10:00");
+    }
+  }, [settings]);
+
+  const saveProfile = async () => {
+    const ok = await updateSettings({
+      studio_name: studioName,
+      whatsapp_number: whatsappNumber,
+      twilio_sid: twilioSid,
+      twilio_token: twilioToken,
+      reminder_time: reminderTime,
+    });
+    if (ok) toast.success("Configurações salvas ✨");
   };
+
+  const addService = async () => {
+    if (!newSvc.name_pt) return toast.error("Nome do serviço obrigatório");
+    const ok = await createService({
+      name_pt: newSvc.name_pt!,
+      name_es: newSvc.name_es || newSvc.name_pt!,
+      category: newSvc.category || "Manicure",
+      duration_min: Number(newSvc.duration_min) || 60,
+      price: Number(newSvc.price) || 0,
+      active: true,
+    });
+    if (ok) {
+      setNewSvc({ duration_min: 60, price: 30, active: true });
+      toast.success("Serviço adicionado");
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-24">
+        <p className="text-sm text-muted-foreground animate-pulse">A carregar configurações...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -42,44 +104,43 @@ export default function ConfiguracoesPage() {
         <h1 className="text-display text-3xl md:text-4xl mt-1">Preferências do estúdio</h1>
       </header>
 
-      {/* Profile */}
+      {/* Perfil */}
       <section className="card-luxury p-6">
         <h3 className="text-display text-xl mb-4">Perfil</h3>
-        <div className="grid md:grid-cols-3 gap-4">
+        <div className="grid md:grid-cols-2 gap-4">
           <div>
-            <Label>Nome</Label>
-            <Input value={settings.profile?.name || ""} onChange={(e) => update({ profile: { ...settings.profile, name: e.target.value } })} className="rounded-lg" />
+            <Label>Nome do estúdio</Label>
+            <Input value={studioName} onChange={(e) => setStudioName(e.target.value)} className="rounded-lg" />
           </div>
           <div>
-            <Label>Telefone</Label>
-            <Input value={settings.profile?.phone || ""} onChange={(e) => update({ profile: { ...settings.profile, phone: e.target.value } })} className="rounded-lg" />
+            <Label>Número WhatsApp (com código do país)</Label>
+            <Input placeholder="+34 698 108 173" value={whatsappNumber} onChange={(e) => setWhatsappNumber(e.target.value)} className="rounded-lg" />
           </div>
-          <div>
-            <Label>Email</Label>
-            <Input type="email" value={settings.profile?.email || ""} onChange={(e) => update({ profile: { ...settings.profile, email: e.target.value } })} className="rounded-lg" />
-          </div>
+        </div>
+        <div className="mt-4 flex justify-end">
+          <Button onClick={saveProfile} className="rounded-lg">Salvar perfil</Button>
         </div>
       </section>
 
-      {/* Working hours */}
+      {/* Horário de funcionamento — local */}
       <section className="card-luxury p-6">
         <h3 className="text-display text-xl mb-4">Horário de funcionamento</h3>
         <div className="space-y-2">
           {DAYS.map((d) => {
-            const cfg = settings.workingHours?.[d.key] || { enabled: false, start: "09:00", end: "19:00" };
+            const cfg = workingHours[d.key] || { enabled: false, start: "09:00", end: "19:00" };
             return (
               <div key={d.key} className="grid grid-cols-[100px_60px_1fr_1fr] md:grid-cols-[140px_60px_1fr_1fr] items-center gap-3 py-1">
                 <span className="text-sm">{d.label}</span>
-                <Switch checked={cfg.enabled} onCheckedChange={(v) => update({ workingHours: { ...settings.workingHours, [d.key]: { ...cfg, enabled: v } } })} />
-                <Input type="time" value={cfg.start} disabled={!cfg.enabled} onChange={(e) => update({ workingHours: { ...settings.workingHours, [d.key]: { ...cfg, start: e.target.value } } })} className="rounded-lg" />
-                <Input type="time" value={cfg.end} disabled={!cfg.enabled} onChange={(e) => update({ workingHours: { ...settings.workingHours, [d.key]: { ...cfg, end: e.target.value } } })} className="rounded-lg" />
+                <Switch checked={cfg.enabled} onCheckedChange={(v) => setWorkingHours({ ...workingHours, [d.key]: { ...cfg, enabled: v } })} />
+                <Input type="time" value={cfg.start} disabled={!cfg.enabled} onChange={(e) => setWorkingHours({ ...workingHours, [d.key]: { ...cfg, start: e.target.value } })} className="rounded-lg" />
+                <Input type="time" value={cfg.end} disabled={!cfg.enabled} onChange={(e) => setWorkingHours({ ...workingHours, [d.key]: { ...cfg, end: e.target.value } })} className="rounded-lg" />
               </div>
             );
           })}
         </div>
         <div className="mt-5 pt-5 border-t border-[hsl(var(--border-solid))]">
           <Label>Intervalo entre citas</Label>
-          <Select value={String(settings.intervalBetween ?? 15)} onValueChange={(v) => update({ intervalBetween: Number(v) as 0 | 10 | 15 | 30 })}>
+          <Select value={String(intervalBetween)} onValueChange={(v) => setIntervalBetween(Number(v))}>
             <SelectTrigger className="md:w-56 rounded-lg"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="0">Sem intervalo</SelectItem>
@@ -91,68 +152,90 @@ export default function ConfiguracoesPage() {
         </div>
       </section>
 
-      {/* Services */}
+      {/* Serviços */}
       <section className="card-luxury p-6">
         <h3 className="text-display text-xl mb-4">Serviços</h3>
         <ul className="space-y-2 mb-4">
           {services.map((s) => (
             <li key={s.id} className="flex items-center gap-3 p-3 rounded-xl border border-[hsl(var(--border))]">
               <div className="flex-1">
-                <p className="font-medium">{s.name}</p>
-                <p className="text-xs text-muted-foreground">{s.duration} min · {eur(s.price)}</p>
+                <p className="font-medium">{s.name_pt}</p>
+                <p className="text-xs text-muted-foreground">{s.name_es && s.name_es !== s.name_pt ? `${s.name_es} · ` : ""}{s.duration_min} min · {eur(s.price)} · {s.category}</p>
               </div>
-              <Switch checked={s.active} onCheckedChange={(v) => setServices((arr) => arr.map((x) => x.id === s.id ? { ...x, active: v } : x))} />
-              <Button variant="ghost" size="sm" onClick={() => setServices((arr) => arr.filter((x) => x.id !== s.id))} className="text-muted-foreground hover:text-destructive">
+              <Switch checked={s.active} onCheckedChange={(v) => updateService(s.id, { active: v })} />
+              <Button variant="ghost" size="sm" onClick={() => deleteService(s.id)} className="text-muted-foreground hover:text-destructive">
                 <Trash2 className="h-4 w-4" />
               </Button>
             </li>
           ))}
         </ul>
-        <div className="grid grid-cols-1 md:grid-cols-[1fr_120px_120px_auto] gap-2 p-3 rounded-xl bg-secondary/40">
-          <Input placeholder="Nome do serviço" value={newSvc.name || ""} onChange={(e) => setNewSvc({ ...newSvc, name: e.target.value })} className="rounded-lg" />
-          <Input type="number" placeholder="Min" value={newSvc.duration || ""} onChange={(e) => setNewSvc({ ...newSvc, duration: Number(e.target.value) })} className="rounded-lg" />
+        <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_100px_100px_auto] gap-2 p-3 rounded-xl bg-secondary/40">
+          <Input placeholder="Nome PT" value={newSvc.name_pt || ""} onChange={(e) => setNewSvc({ ...newSvc, name_pt: e.target.value })} className="rounded-lg" />
+          <Input placeholder="Nome ES" value={newSvc.name_es || ""} onChange={(e) => setNewSvc({ ...newSvc, name_es: e.target.value })} className="rounded-lg" />
+          <Input type="number" placeholder="Min" value={newSvc.duration_min || ""} onChange={(e) => setNewSvc({ ...newSvc, duration_min: Number(e.target.value) })} className="rounded-lg" />
           <Input type="number" step="0.01" placeholder="€" value={newSvc.price || ""} onChange={(e) => setNewSvc({ ...newSvc, price: Number(e.target.value) })} className="rounded-lg" />
           <Button onClick={addService} className="rounded-lg"><Plus className="h-4 w-4" /> Adicionar</Button>
         </div>
       </section>
 
-      {/* Wassenger */}
+      {/* Twilio */}
       <section className="card-luxury p-6">
-        <h3 className="text-display text-xl mb-4">Wassenger · WhatsApp API</h3>
-        <Label>API Key</Label>
-        <div className="relative">
-          <Input
-            type={showKey ? "text" : "password"}
-            value={settings.wassengerKey || ""}
-            onChange={(e) => update({ wassengerKey: e.target.value })}
-            placeholder="Cole sua API Key Wassenger aqui"
-            className="rounded-lg pr-10"
-          />
-          <button type="button" onClick={() => setShowKey((v) => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground">
-            {showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-          </button>
-        </div>
-        <p className="text-[11px] text-muted-foreground mt-2">Obtenha sua chave em wassenger.com → API → Tokens</p>
-
-        <div className="grid md:grid-cols-2 gap-4 mt-5">
+        <h3 className="text-display text-xl mb-4">Twilio · WhatsApp API</h3>
+        <div className="space-y-4">
           <div>
-            <Label>Horário de disparo</Label>
-            <Input type="time" value={settings.reminderTime || "10:00"} onChange={(e) => update({ reminderTime: e.target.value })} className="rounded-lg" />
+            <Label>Twilio Account SID</Label>
+            <div className="relative">
+              <Input
+                type={showSid ? "text" : "password"}
+                value={twilioSid}
+                onChange={(e) => setTwilioSid(e.target.value)}
+                placeholder="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                className="rounded-lg pr-10"
+              />
+              <button type="button" onClick={() => setShowSid((v) => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground">
+                {showSid ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
           </div>
           <div>
-            <Label>Idioma padrão</Label>
-            <Select value={settings.defaultLang || "PT"} onValueChange={(v: Lang) => update({ defaultLang: v })}>
-              <SelectTrigger className="rounded-lg"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="PT">Português (PT-BR)</SelectItem>
-                <SelectItem value="ES">Español</SelectItem>
-              </SelectContent>
-            </Select>
+            <Label>Twilio Auth Token</Label>
+            <div className="relative">
+              <Input
+                type={showToken ? "text" : "password"}
+                value={twilioToken}
+                onChange={(e) => setTwilioToken(e.target.value)}
+                placeholder="Token de autenticação"
+                className="rounded-lg pr-10"
+              />
+              <button type="button" onClick={() => setShowToken((v) => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground">
+                {showToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
+          </div>
+          <div className="grid md:grid-cols-2 gap-4">
+            <div>
+              <Label>Horário de disparo</Label>
+              <Input type="time" value={reminderTime} onChange={(e) => setReminderTime(e.target.value)} className="rounded-lg" />
+            </div>
+            <div>
+              <Label>Idioma padrão (local)</Label>
+              <Select value={defaultLang} onValueChange={(v: Lang) => setDefaultLang(v)}>
+                <SelectTrigger className="rounded-lg"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="PT">Português (PT-BR)</SelectItem>
+                  <SelectItem value="ES">Español</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <p className="text-[11px] text-muted-foreground">Obtenha as credenciais em twilio.com → Console → Account Info</p>
+          <div className="flex justify-end">
+            <Button onClick={saveProfile} className="rounded-lg">Salvar configurações</Button>
           </div>
         </div>
       </section>
 
-      <p className="text-xs text-muted-foreground text-center">Todas as alterações são salvas automaticamente ✨</p>
+      <p className="text-xs text-muted-foreground text-center">Horários e preferências locais são guardados automaticamente ✨</p>
     </div>
   );
 }
