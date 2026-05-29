@@ -12,7 +12,7 @@ import { Avatar } from "@/components/Avatar";
 import { StatusBadge } from "@/components/StatusBadge";
 
 export default function DashboardPage() {
-  const { appointments, loading } = useAppointments();
+  const { appointments, loading, error } = useAppointments();
   const { records: transactions } = useFinancial();
   const { logs } = useWhatsappLogs();
 
@@ -56,6 +56,14 @@ export default function DashboardPage() {
     return (
       <div className="flex items-center justify-center py-24">
         <p className="text-sm text-muted-foreground animate-pulse">A carregar...</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center py-24">
+        <p className="text-sm text-destructive">{error}</p>
       </div>
     );
   }

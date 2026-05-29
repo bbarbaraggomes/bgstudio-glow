@@ -33,7 +33,7 @@ const DEFAULT_HOURS = {
 };
 
 export default function ConfiguracoesPage() {
-  const { settings, loading, updateSettings } = useSettings();
+  const { settings, loading, error, updateSettings } = useSettings();
   const { services, createService, updateService, deleteService } = useServices();
 
   // Horários e preferências locais (não estão na tabela Supabase)
@@ -93,6 +93,14 @@ export default function ConfiguracoesPage() {
     return (
       <div className="flex items-center justify-center py-24">
         <p className="text-sm text-muted-foreground animate-pulse">A carregar configurações...</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center py-24">
+        <p className="text-sm text-destructive">{error}</p>
       </div>
     );
   }

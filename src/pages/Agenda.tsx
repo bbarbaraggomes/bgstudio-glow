@@ -22,7 +22,7 @@ import { toast } from "sonner";
 type View = "month" | "week" | "day";
 
 export default function AgendaPage() {
-  const { appointments, loading, createAppointment, updateAppointment, deleteAppointment } = useAppointments();
+  const { appointments, loading, error, createAppointment, updateAppointment, deleteAppointment } = useAppointments();
   const { clients } = useClients();
   const { activeServices: services } = useServices();
   const { createRecord } = useFinancial();
@@ -115,6 +115,14 @@ export default function AgendaPage() {
     return (
       <div className="flex items-center justify-center py-24">
         <p className="text-sm text-muted-foreground animate-pulse">A carregar agenda...</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center py-24">
+        <p className="text-sm text-destructive">{error}</p>
       </div>
     );
   }

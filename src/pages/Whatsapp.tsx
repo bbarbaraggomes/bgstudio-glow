@@ -20,7 +20,7 @@ const buildMessage = (lang: Lang, name: string, time: string, service: string) =
 };
 
 export default function WhatsappPage() {
-  const { settings } = useSettings();
+  const { settings, loading, error } = useSettings();
   const { appointments } = useAppointments();
   const { logs, createLog } = useWhatsappLogs();
   const [remindersEnabled, setRemindersEnabled] = useStorage<boolean>("remindersEnabled", true);
@@ -57,6 +57,22 @@ export default function WhatsappPage() {
   };
 
   const connected = !!settings?.twilio_sid;
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-24">
+        <p className="text-sm text-muted-foreground animate-pulse">A carregar...</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center py-24">
+        <p className="text-sm text-destructive">{error}</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

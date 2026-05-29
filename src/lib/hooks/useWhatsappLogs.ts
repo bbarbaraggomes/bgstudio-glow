@@ -6,6 +6,7 @@ import { Lang, WhatsappLog } from "@/lib/types";
 export function useWhatsappLogs() {
   const [logs, setLogs] = useState<WhatsappLog[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchLogs = useCallback(async () => {
     setLoading(true);
@@ -14,8 +15,11 @@ export function useWhatsappLogs() {
       .select("*, clients(name)")
       .order("sent_at", { ascending: false });
     if (error) {
+      console.error(error);
+      setError("Erro ao carregar logs de WhatsApp");
       toast.error("Erro ao carregar logs de WhatsApp");
     } else {
+      setError(null);
       setLogs((data as WhatsappLog[]) ?? []);
     }
     setLoading(false);
@@ -36,10 +40,10 @@ export function useWhatsappLogs() {
   }) => {
     const payload = { ...data, sent_at: new Date().toISOString() };
     const { error } = await supabase.from("whatsapp_logs").insert([payload]);
-    if (error) { toast.error("Erro ao registar log de WhatsApp"); return false; }
+    if (error) { console.error(error); toast.error("Erro ao registar log de WhatsApp"); return false; }
     await fetchLogs();
     return true;
   };
 
-  return { logs, loading, fetchLogs, createLog };
+  return { logs, loading, error, fetchLogs, createLog };
 }

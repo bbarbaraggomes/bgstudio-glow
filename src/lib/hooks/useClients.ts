@@ -6,6 +6,7 @@ import { Client } from "@/lib/types";
 export function useClients() {
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchClients = useCallback(async () => {
     setLoading(true);
@@ -14,8 +15,11 @@ export function useClients() {
       .select("*")
       .order("name");
     if (error) {
+      console.error(error);
+      setError("Erro ao carregar clientes");
       toast.error("Erro ao carregar clientes");
     } else {
+      setError(null);
       setClients(data ?? []);
     }
     setLoading(false);
@@ -27,24 +31,24 @@ export function useClients() {
 
   const createClient = async (data: Omit<Client, "id" | "created_at">) => {
     const { error } = await supabase.from("clients").insert([data]);
-    if (error) { toast.error("Erro ao criar cliente"); return false; }
+    if (error) { console.error(error); toast.error("Erro ao criar cliente"); return false; }
     await fetchClients();
     return true;
   };
 
   const updateClient = async (id: string, data: Partial<Omit<Client, "id" | "created_at">>) => {
     const { error } = await supabase.from("clients").update(data).eq("id", id);
-    if (error) { toast.error("Erro ao atualizar cliente"); return false; }
+    if (error) { console.error(error); toast.error("Erro ao atualizar cliente"); return false; }
     await fetchClients();
     return true;
   };
 
   const deleteClient = async (id: string) => {
     const { error } = await supabase.from("clients").delete().eq("id", id);
-    if (error) { toast.error("Erro ao remover cliente"); return false; }
+    if (error) { console.error(error); toast.error("Erro ao remover cliente"); return false; }
     await fetchClients();
     return true;
   };
 
-  return { clients, loading, fetchClients, createClient, updateClient, deleteClient };
+  return { clients, loading, error, fetchClients, createClient, updateClient, deleteClient };
 }

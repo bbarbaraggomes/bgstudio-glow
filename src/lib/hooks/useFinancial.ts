@@ -6,6 +6,7 @@ import { FinancialRecord } from "@/lib/types";
 export function useFinancial(month?: string) {
   const [records, setRecords] = useState<FinancialRecord[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchRecords = useCallback(async () => {
     setLoading(true);
@@ -24,8 +25,11 @@ export function useFinancial(month?: string) {
 
     const { data, error } = await query;
     if (error) {
+      console.error(error);
+      setError("Erro ao carregar registos financeiros");
       toast.error("Erro ao carregar registos financeiros");
     } else {
+      setError(null);
       setRecords((data as FinancialRecord[]) ?? []);
     }
     setLoading(false);
@@ -37,17 +41,17 @@ export function useFinancial(month?: string) {
 
   const createRecord = async (data: Omit<FinancialRecord, "id" | "created_at" | "services">) => {
     const { error } = await supabase.from("financial_records").insert([data]);
-    if (error) { toast.error("Erro ao criar lançamento"); return false; }
+    if (error) { console.error(error); toast.error("Erro ao criar lançamento"); return false; }
     await fetchRecords();
     return true;
   };
 
   const deleteRecord = async (id: string) => {
     const { error } = await supabase.from("financial_records").delete().eq("id", id);
-    if (error) { toast.error("Erro ao remover lançamento"); return false; }
+    if (error) { console.error(error); toast.error("Erro ao remover lançamento"); return false; }
     await fetchRecords();
     return true;
   };
 
-  return { records, loading, fetchRecords, createRecord, deleteRecord };
+  return { records, loading, error, fetchRecords, createRecord, deleteRecord };
 }

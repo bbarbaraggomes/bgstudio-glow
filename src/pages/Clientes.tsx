@@ -16,7 +16,7 @@ import { format, parseISO } from "date-fns";
 import { ptBR } from "date-fns/locale";
 
 export default function ClientesPage() {
-  const { clients, loading, createClient, updateClient, deleteClient } = useClients();
+  const { clients, loading, error, createClient, updateClient, deleteClient } = useClients();
   const { appointments } = useAppointments();
   const [q, setQ] = useState("");
   const [sort, setSort] = useState<"name" | "recent" | "spent">("name");
@@ -69,6 +69,14 @@ export default function ClientesPage() {
     return (
       <div className="flex items-center justify-center py-24">
         <p className="text-sm text-muted-foreground animate-pulse">A carregar clientes...</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center py-24">
+        <p className="text-sm text-destructive">{error}</p>
       </div>
     );
   }

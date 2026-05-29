@@ -19,7 +19,7 @@ import { Bar, BarChart, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis
 const PIE_COLORS = ["#C9A96E", "#A07840", "#E8B86D", "#7DAB8B", "#F2DDD6", "#8C7B74"];
 
 export default function FinanceiroPage() {
-  const { records, loading, createRecord, deleteRecord } = useFinancial();
+  const { records, loading, error, createRecord, deleteRecord } = useFinancial();
   const { appointments } = useAppointments();
   const { services } = useServices();
   const [open, setOpen] = useState<"income" | "expense" | null>(null);
@@ -73,6 +73,14 @@ export default function FinanceiroPage() {
     return (
       <div className="flex items-center justify-center py-24">
         <p className="text-sm text-muted-foreground animate-pulse">A carregar financeiro...</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center py-24">
+        <p className="text-sm text-destructive">{error}</p>
       </div>
     );
   }

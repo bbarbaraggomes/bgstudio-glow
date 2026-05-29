@@ -3,9 +3,12 @@ import { toast } from "sonner";
 import { supabase } from "@/lib/supabase";
 import { Settings } from "@/lib/types";
 
+const normalizeTime = (t: string) => (t?.length > 5 ? t.slice(0, 5) : t);
+
 export function useSettings() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchSettings = useCallback(async () => {
     setLoading(true);
@@ -16,9 +19,12 @@ export function useSettings() {
       .limit(1)
       .maybeSingle();
     if (error) {
+      console.error(error);
+      setError("Erro ao carregar configurações");
       toast.error("Erro ao carregar configurações");
     } else {
-      setSettings(data);
+      setError(null);
+      setSettings(data ? { ...data, reminder_time: normalizeTime(data.reminder_time) } : null);
     }
     setLoading(false);
   }, []);
@@ -35,10 +41,10 @@ export function useSettings() {
     } else {
       ({ error } = await supabase.from("settings").insert([payload]));
     }
-    if (error) { toast.error("Erro ao salvar configurações"); return false; }
+    if (error) { console.error(error); toast.error("Erro ao salvar configurações"); return false; }
     await fetchSettings();
     return true;
   };
 
-  return { settings, loading, fetchSettings, updateSettings };
+  return { settings, loading, error, fetchSettings, updateSettings };
 }
