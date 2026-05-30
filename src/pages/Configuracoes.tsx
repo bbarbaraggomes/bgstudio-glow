@@ -108,7 +108,7 @@ export default function ConfiguracoesPage() {
 
   const handleGoogleConnect = () => {
     // TODO: Configurar Google Cloud Console e definir VITE_GOOGLE_CLIENT_ID no Vercel
-    const clientId = (import.meta as any).env?.VITE_GOOGLE_CLIENT_ID;
+    const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
     if (!clientId) {
       toast.error("VITE_GOOGLE_CLIENT_ID não configurado. Consulte a documentação.");
       return;
