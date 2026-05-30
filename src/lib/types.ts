@@ -31,6 +31,7 @@ export interface Appointment {
   status: AppointmentStatus;
   reminder_sent: boolean;
   notes?: string;
+  google_event_id?: string;
   created_at?: string;
 }
 
@@ -71,5 +72,8 @@ export interface Settings {
   twilio_sid: string;
   twilio_token: string;
   reminder_time: string;
+  google_calendar_id?: string;
+  google_connected?: boolean;
+  google_sync_enabled?: boolean;
   updated_at?: string;
 }

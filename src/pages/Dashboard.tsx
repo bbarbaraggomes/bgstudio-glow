@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { Link } from "react-router-dom";
 import { Calendar, MessageCircle, Plus, TrendingUp, UserPlus, Wallet } from "lucide-react";
-import { format, isToday, startOfWeek, addDays, isSameDay } from "date-fns";
+import { format, isToday, startOfWeek, addDays, isSameDay, parseISO } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { useAppointments } from "@/lib/hooks/useAppointments";
 import { useFinancial } from "@/lib/hooks/useFinancial";
@@ -31,6 +31,18 @@ export default function DashboardPage() {
   const week = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
   const dayBusy = (d: Date) =>
     appointments.filter((a) => a.date === format(d, "yyyy-MM-dd") && a.status !== "cancelada").length;
+
+  const upcomingApts = useMemo(
+    () =>
+      appointments
+        .filter(
+          (a) =>
+            a.date >= todayStr &&
+            (a.status === "agendada" || a.status === "confirmada")
+        )
+        .slice(0, 5),
+    [appointments, todayStr]
+  );
 
   const greeting = () => {
     const h = new Date().getHours();
@@ -156,6 +168,37 @@ export default function DashboardPage() {
             </ul>
           )}
         </div>
+      </section>
+      {/* Próximas citas */}
+      <section className="card-luxury p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-display text-xl">Próximas citas</h2>
+          <Link to="/agenda" className="text-xs text-primary hover:underline">Ver agenda →</Link>
+        </div>
+        {upcomingApts.length === 0 ? (
+          <div className="py-10 text-center text-muted-foreground">
+            <Calendar className="h-8 w-8 mx-auto opacity-30 mb-2" />
+            <p className="text-sm">Nenhuma cita agendada</p>
+          </div>
+        ) : (
+          <ul className="divide-y divide-[hsl(var(--border-solid))]">
+            {upcomingApts.map((a) => (
+              <li key={a.id} className="py-3 flex items-center gap-4">
+                <div className="w-24 shrink-0">
+                  <p className="text-[11px] text-muted-foreground capitalize">
+                    {format(parseISO(a.date), "EEE, d MMM", { locale: ptBR })}
+                  </p>
+                  <p className="text-display text-lg leading-tight">{a.time}</p>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium truncate">{a.clients?.name}</p>
+                  <p className="text-xs text-muted-foreground truncate">{a.services?.name_pt}</p>
+                </div>
+                <StatusBadge status={a.status} />
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
     </div>
   );

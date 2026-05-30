@@ -34,10 +34,14 @@ export function useAppointments() {
   }, [fetchAppointments]);
 
   const createAppointment = async (data: Omit<Appointment, "id" | "created_at">) => {
-    const { error } = await supabase.from("appointments").insert([data]);
-    if (error) { console.error(error); toast.error("Erro ao criar agendamento"); return false; }
+    const { data: created, error } = await supabase
+      .from("appointments")
+      .insert([data])
+      .select("id")
+      .single();
+    if (error) { console.error(error); toast.error("Erro ao criar agendamento"); return null; }
     await fetchAppointments();
-    return true;
+    return created.id as string;
   };
 
   const updateAppointment = async (id: string, data: Partial<Omit<Appointment, "id" | "created_at">>) => {

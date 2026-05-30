@@ -6,6 +6,8 @@ import { useAppointments } from "@/lib/hooks/useAppointments";
 import { useClients } from "@/lib/hooks/useClients";
 import { useServices } from "@/lib/hooks/useServices";
 import { useFinancial } from "@/lib/hooks/useFinancial";
+import { useSettings } from "@/lib/hooks/useSettings";
+import { useGoogleCalendar } from "@/lib/hooks/useGoogleCalendar";
 import { Appointment, AppointmentRow, AppointmentStatus, Client, Service } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -26,6 +28,8 @@ export default function AgendaPage() {
   const { clients } = useClients();
   const { activeServices: services } = useServices();
   const { createRecord } = useFinancial();
+  const { settings } = useSettings();
+  const { createEvent, deleteEvent } = useGoogleCalendar();
 
   const [cursor, setCursor] = useState(new Date());
   const [view, setView] = useState<View>("month");
@@ -72,7 +76,7 @@ export default function AgendaPage() {
       const ok = await updateAppointment(editing.id, data);
       if (ok) toast.success("Cita atualizada");
     } else {
-      const ok = await createAppointment({
+      const newId = await createAppointment({
         client_id: data.client_id!,
         service_id: data.service_id!,
         date: data.date!,
@@ -81,7 +85,30 @@ export default function AgendaPage() {
         reminder_sent: data.reminder_sent ?? true,
         notes: data.notes,
       });
-      if (ok) toast.success("Cita criada com sucesso ✨");
+      if (newId) {
+        if (settings?.google_sync_enabled && settings?.google_calendar_id) {
+          const client = clients.find((c) => c.id === data.client_id);
+          const service = services.find((s) => s.id === data.service_id);
+          if (client && service) {
+            const result = await createEvent(
+              { id: newId, date: data.date!, time: data.time!, notes: data.notes },
+              client,
+              service,
+              settings.google_calendar_id
+            );
+            if (result.success && result.eventId) {
+              await updateAppointment(newId, { google_event_id: result.eventId });
+              toast.success("Cita criada e adicionada ao Google Calendar ✓");
+            } else {
+              toast.warning("Cita criada. Erro ao sincronizar com Google Calendar.");
+            }
+          } else {
+            toast.success("Cita criada com sucesso ✨");
+          }
+        } else {
+          toast.success("Cita criada com sucesso ✨");
+        }
+      }
     }
     setOpen(false);
   };
@@ -104,6 +131,9 @@ export default function AgendaPage() {
   };
 
   const removeApt = async (a: AppointmentRow) => {
+    if (a.google_event_id && settings?.google_connected && settings?.google_calendar_id) {
+      await deleteEvent(a.google_event_id, settings.google_calendar_id);
+    }
     const ok = await deleteAppointment(a.id);
     if (ok) {
       setOpen(false);
