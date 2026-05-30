@@ -8,6 +8,7 @@ import { useServices } from "@/lib/hooks/useServices";
 import { useFinancial } from "@/lib/hooks/useFinancial";
 import { useSettings } from "@/lib/hooks/useSettings";
 import { useGoogleCalendar } from "@/lib/hooks/useGoogleCalendar";
+import { useReputation } from "@/lib/hooks/useReputation";
 import { Appointment, AppointmentRow, AppointmentStatus, Client, Service } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -25,17 +26,19 @@ type View = "month" | "week" | "day";
 
 export default function AgendaPage() {
   const { appointments, loading, error, createAppointment, updateAppointment, deleteAppointment } = useAppointments();
-  const { clients } = useClients();
+  const { clients, fetchClients } = useClients();
   const { activeServices: services } = useServices();
   const { createRecord } = useFinancial();
   const { settings } = useSettings();
   const { createEvent, deleteEvent } = useGoogleCalendar();
+  const { updateClientReputation } = useReputation();
 
   const [cursor, setCursor] = useState(new Date());
   const [view, setView] = useState<View>("month");
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<AppointmentRow | null>(null);
   const [presetDate, setPresetDate] = useState<string | null>(null);
+  const [cancelModalApt, setCancelModalApt] = useState<AppointmentRow | null>(null);
 
   const monthDays = useMemo(() => {
     const start = startOfWeek(startOfMonth(cursor), { weekStartsOn: 1 });
@@ -114,6 +117,11 @@ export default function AgendaPage() {
   };
 
   const setStatus = async (a: AppointmentRow, status: AppointmentStatus) => {
+    if (status === "cancelada") {
+      setOpen(false);
+      setCancelModalApt(a);
+      return;
+    }
     await updateAppointment(a.id, { status });
     if (status === "concluida") {
       await createRecord({
@@ -124,10 +132,21 @@ export default function AgendaPage() {
         appointment_id: a.id,
         date: a.date,
       });
+      await updateClientReputation(a.client_id);
+      await fetchClients();
       toast.success("Cita concluída · lançamento criado");
     } else {
       toast.success("Status atualizado");
     }
+  };
+
+  const handleCancelReason = async (a: AppointmentRow, withNotice: boolean) => {
+    const status: AppointmentStatus = withNotice ? "cancelada" : "no_show";
+    await updateAppointment(a.id, { status });
+    await updateClientReputation(a.client_id);
+    await fetchClients();
+    setCancelModalApt(null);
+    toast.success(withNotice ? "Cita cancelada com aviso" : "Marcada como faltou sem avisar");
   };
 
   const removeApt = async (a: AppointmentRow) => {
@@ -305,6 +324,12 @@ export default function AgendaPage() {
         onDelete={removeApt}
         onStatus={setStatus}
       />
+
+      <CancelReasonDialog
+        apt={cancelModalApt}
+        onClose={() => setCancelModalApt(null)}
+        onConfirm={handleCancelReason}
+      />
     </div>
   );
 }
@@ -423,6 +448,52 @@ function AppointmentDialog({
               <Button onClick={submit} className="rounded-lg">{editing ? "Salvar" : "Criar cita"}</Button>
             </div>
           </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function CancelReasonDialog({
+  apt, onClose, onConfirm,
+}: {
+  apt: AppointmentRow | null;
+  onClose: () => void;
+  onConfirm: (a: AppointmentRow, withNotice: boolean) => void;
+}) {
+  if (!apt) return null;
+  return (
+    <Dialog open={!!apt} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-w-sm rounded-2xl">
+        <DialogHeader>
+          <DialogTitle className="font-display text-xl">Motivo do cancelamento</DialogTitle>
+        </DialogHeader>
+        <p className="text-sm text-muted-foreground mb-4">
+          {apt.clients?.name} · {apt.services?.name_pt} · {apt.date}
+        </p>
+        <div className="space-y-3">
+          <Button
+            className="w-full rounded-xl justify-start gap-3 h-auto py-4"
+            variant="outline"
+            onClick={() => onConfirm(apt, true)}
+          >
+            <span className="text-xl">📱</span>
+            <div className="text-left">
+              <p className="font-medium">Cancelou com aviso</p>
+              <p className="text-xs text-muted-foreground">Pontuação: −10 pontos</p>
+            </div>
+          </Button>
+          <Button
+            className="w-full rounded-xl justify-start gap-3 h-auto py-4 border-destructive/40 text-destructive hover:bg-destructive/5"
+            variant="outline"
+            onClick={() => onConfirm(apt, false)}
+          >
+            <span className="text-xl">❌</span>
+            <div className="text-left">
+              <p className="font-medium">Faltou sem avisar</p>
+              <p className="text-xs text-muted-foreground">Pontuação: −25 pontos</p>
+            </div>
+          </Button>
         </div>
       </DialogContent>
     </Dialog>

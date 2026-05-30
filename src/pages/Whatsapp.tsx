@@ -8,7 +8,7 @@ import { AppointmentRow, Lang } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Avatar } from "@/components/Avatar";
-import { format, parseISO, addDays } from "date-fns";
+import { format, parseISO, addDays, subDays } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { toast } from "sonner";
 
@@ -19,6 +19,13 @@ const buildMessage = (lang: Lang, name: string, time: string, service: string) =
   return `¡Hola ${name}! 💅\n\nTe recordamos que mañana tienes una cita con Bárbara Gomes Beauty a las ${time}.\nServicio: ${service}\n\n📍 Vigo, Galicia\n\n¡Cualquier duda, aquí estamos!\n— Bárbara Gomes Beauty ✨`;
 };
 
+const buildRecoveryMessage = (lang: Lang, name: string) => {
+  if (lang === "PT") {
+    return `Olá ${name}! 💕\n\nSentimos a sua falta na última cita! Gostaríamos de te ter de volta no nosso estúdio.\n\nQue tal agendar uma nova sessão? Temos horários disponíveis esta semana ✨\n\n📍 Vigo, Galicia\n— Bárbara Gomes Beauty`;
+  }
+  return `¡Hola ${name}! 💕\n\n¡Te echamos de menos en tu última cita! Nos encantaría verte de nuevo en nuestro estudio.\n\n¿Qué tal si agendas una nueva sesión? Tenemos horarios disponibles esta semana ✨\n\n📍 Vigo, Galicia\n— Bárbara Gomes Beauty`;
+};
+
 export default function WhatsappPage() {
   const { settings, loading, error } = useSettings();
   const { appointments } = useAppointments();
@@ -26,12 +33,22 @@ export default function WhatsappPage() {
   const [remindersEnabled, setRemindersEnabled] = useStorage<boolean>("remindersEnabled", true);
 
   const tomorrow = format(addDays(new Date(), 1), "yyyy-MM-dd");
+  const twoWeeksAgo = format(subDays(new Date(), 14), "yyyy-MM-dd");
+
   const upcoming = useMemo(
     () =>
       appointments.filter(
         (a) => a.date === tomorrow && a.reminder_sent && a.status !== "cancelada"
       ),
     [appointments, tomorrow]
+  );
+
+  const noShowRecent = useMemo(
+    () =>
+      appointments.filter(
+        (a) => a.status === "no_show" && a.date >= twoWeeksAgo
+      ),
+    [appointments, twoWeeksAgo]
   );
 
   const sendNow = async (a: AppointmentRow) => {
@@ -52,6 +69,28 @@ export default function WhatsappPage() {
         toast.warning("Twilio não configurado · simulação salva no log");
       } else {
         toast.success(`Lembrete enviado para ${a.clients.name}`);
+      }
+    }
+  };
+
+  const sendRecovery = async (a: AppointmentRow) => {
+    if (!a.clients) return;
+    const lang = a.clients.language as Lang;
+    const msg = buildRecoveryMessage(lang, a.clients.name.split(" ")[0]);
+    const status = settings?.twilio_sid ? "enviado" : "pendente";
+    const ok = await createLog({
+      client_id: a.client_id,
+      appointment_id: a.id,
+      phone: a.clients.phone,
+      message: msg,
+      language: lang,
+      status,
+    });
+    if (ok) {
+      if (!settings?.twilio_sid) {
+        toast.warning("Twilio não configurado · mensagem salva no log");
+      } else {
+        toast.success(`Mensagem de recuperação enviada para ${a.clients.name}`);
       }
     }
   };
@@ -112,6 +151,43 @@ export default function WhatsappPage() {
                   <p className="text-xs text-muted-foreground truncate">{a.time} · {a.services?.name_pt}</p>
                 </div>
                 <Button size="sm" onClick={() => sendNow(a)} className="rounded-lg"><Send className="h-3.5 w-3.5" /> Enviar agora</Button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section className="card-luxury p-5">
+        <div className="flex items-center gap-2 mb-1">
+          <h3 className="text-display text-xl">Mensagens de recuperação</h3>
+          {noShowRecent.length > 0 && (
+            <span className="text-[11px] px-2 py-0.5 rounded-full bg-destructive/15 text-destructive border border-destructive/30 font-medium">
+              {noShowRecent.length}
+            </span>
+          )}
+        </div>
+        <p className="text-xs text-muted-foreground mb-4">Clientes que faltaram sem avisar nos últimos 14 dias</p>
+        {noShowRecent.length === 0 ? (
+          <p className="py-8 text-center text-sm text-muted-foreground">Nenhuma falta recente 🎉</p>
+        ) : (
+          <ul className="space-y-2">
+            {noShowRecent.map((a) => (
+              <li key={a.id} className="flex items-center gap-4 p-3 rounded-xl border border-destructive/20 bg-destructive/5">
+                <Avatar name={a.clients?.name || "?"} size={40} />
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium truncate">{a.clients?.name} <span className="text-xs text-muted-foreground">· {a.clients?.language}</span></p>
+                  <p className="text-xs text-muted-foreground truncate">
+                    Faltou em {format(parseISO(a.date), "dd/MM", { locale: ptBR })} · {a.services?.name_pt}
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => sendRecovery(a)}
+                  className="rounded-lg border-destructive/40 text-destructive hover:bg-destructive/5"
+                >
+                  <Send className="h-3.5 w-3.5" /> Enviar lembrete
+                </Button>
               </li>
             ))}
           </ul>

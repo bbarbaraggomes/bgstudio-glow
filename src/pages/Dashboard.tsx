@@ -1,11 +1,14 @@
 import { useMemo } from "react";
 import { Link } from "react-router-dom";
-import { Calendar, MessageCircle, Plus, TrendingUp, UserPlus, Wallet } from "lucide-react";
-import { format, isToday, startOfWeek, addDays, isSameDay, parseISO } from "date-fns";
+import { AlertTriangle, Calendar, MessageCircle, Plus, Star, TrendingUp, UserPlus, Wallet } from "lucide-react";
+import { format, isToday, startOfWeek, addDays, parseISO, startOfMonth, endOfMonth } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { useAppointments } from "@/lib/hooks/useAppointments";
+import { useClients } from "@/lib/hooks/useClients";
+import { useServices } from "@/lib/hooks/useServices";
 import { useFinancial } from "@/lib/hooks/useFinancial";
 import { useWhatsappLogs } from "@/lib/hooks/useWhatsappLogs";
+import { getClientBadge } from "@/lib/hooks/useReputation";
 import { eur } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Avatar } from "@/components/Avatar";
@@ -13,6 +16,8 @@ import { StatusBadge } from "@/components/StatusBadge";
 
 export default function DashboardPage() {
   const { appointments, loading, error } = useAppointments();
+  const { clients } = useClients();
+  const { services } = useServices();
   const { records: transactions } = useFinancial();
   const { logs } = useWhatsappLogs();
 
@@ -43,6 +48,42 @@ export default function DashboardPage() {
         .slice(0, 5),
     [appointments, todayStr]
   );
+
+  const monthStart = format(startOfMonth(new Date()), "yyyy-MM-dd");
+  const monthEnd = format(endOfMonth(new Date()), "yyyy-MM-dd");
+
+  const bestClient = useMemo(() => {
+    const monthDone = appointments.filter(
+      (a) => a.status === "concluida" && a.date >= monthStart && a.date <= monthEnd
+    );
+    const spentByClient: Record<string, number> = {};
+    monthDone.forEach((a) => {
+      spentByClient[a.client_id] = (spentByClient[a.client_id] || 0) + (a.services?.price || 0);
+    });
+    const topId = Object.entries(spentByClient).sort((a, b) => b[1] - a[1])[0]?.[0];
+    if (!topId) return null;
+    return { client: clients.find((c) => c.id === topId), spent: spentByClient[topId] };
+  }, [appointments, clients, monthStart, monthEnd]);
+
+  const alertCount = useMemo(() => {
+    return clients.filter((c) => {
+      const score = c.reputation_score ?? 100;
+      return score < 60;
+    }).length;
+  }, [clients]);
+
+  const popularService = useMemo(() => {
+    const monthDone = appointments.filter(
+      (a) => a.status === "concluida" && a.date >= monthStart && a.date <= monthEnd
+    );
+    const countByService: Record<string, number> = {};
+    monthDone.forEach((a) => {
+      if (a.service_id) countByService[a.service_id] = (countByService[a.service_id] || 0) + 1;
+    });
+    const topId = Object.entries(countByService).sort((a, b) => b[1] - a[1])[0];
+    if (!topId) return null;
+    return { service: services.find((s) => s.id === topId[0]), count: topId[1] };
+  }, [appointments, services, monthStart, monthEnd]);
 
   const greeting = () => {
     const h = new Date().getHours();
@@ -112,6 +153,72 @@ export default function DashboardPage() {
         ))}
       </section>
 
+      {/* Destaques do mês */}
+      <section>
+        <h2 className="text-display text-xl mb-4">Destaques do mês</h2>
+        <div className="grid sm:grid-cols-3 gap-4">
+          {/* Best client */}
+          <div className="card-luxury p-5">
+            <div className="flex items-center gap-2 mb-3">
+              <Star className="h-4 w-4 text-[hsl(var(--warning))]" />
+              <p className="text-[11px] uppercase tracking-widest text-muted-foreground">Melhor cliente</p>
+            </div>
+            {bestClient?.client ? (
+              <div className="flex items-center gap-3">
+                <Avatar name={bestClient.client.name} size={44} />
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium truncate">{bestClient.client.name}</p>
+                  <p className="text-xs text-muted-foreground">{eur(bestClient.spent)} este mês</p>
+                  <span className={`inline-flex items-center text-[10px] px-2 py-0.5 rounded-full border font-medium mt-1 ${getClientBadge(bestClient.client.reputation_score ?? 100).cls}`}>
+                    {getClientBadge(bestClient.client.reputation_score ?? 100).label}
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground py-4 text-center">Sem dados este mês</p>
+            )}
+          </div>
+
+          {/* Alerts */}
+          <div className="card-luxury p-5">
+            <div className="flex items-center gap-2 mb-3">
+              <AlertTriangle className="h-4 w-4 text-destructive" />
+              <p className="text-[11px] uppercase tracking-widest text-muted-foreground">Alertas de reputação</p>
+            </div>
+            {alertCount > 0 ? (
+              <div>
+                <p className="text-display text-4xl text-destructive">{alertCount}</p>
+                <p className="text-xs text-muted-foreground mt-1">clientes com baixa reputação</p>
+                <Link to="/clientes?tab=noshow">
+                  <Button size="sm" variant="outline" className="mt-3 rounded-lg text-xs border-destructive/40 text-destructive hover:bg-destructive/5">
+                    Ver furonas →
+                  </Button>
+                </Link>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground py-4 text-center">Nenhum alerta 🎉</p>
+            )}
+          </div>
+
+          {/* Popular service */}
+          <div className="card-luxury p-5">
+            <div className="flex items-center gap-2 mb-3">
+              <TrendingUp className="h-4 w-4 text-primary" />
+              <p className="text-[11px] uppercase tracking-widest text-muted-foreground">Serviço mais popular</p>
+            </div>
+            {popularService?.service ? (
+              <div>
+                <p className="font-medium">{popularService.service.name_pt}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">{popularService.count}× realizado este mês</p>
+                <p className="text-xs text-muted-foreground">{eur(popularService.service.price)} por sessão</p>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground py-4 text-center">Sem dados este mês</p>
+            )}
+          </div>
+        </div>
+      </section>
+
       {/* Week + Today list */}
       <section className="grid lg:grid-cols-3 gap-6">
         <div className="card-luxury p-6 lg:col-span-1">
@@ -169,6 +276,7 @@ export default function DashboardPage() {
           )}
         </div>
       </section>
+
       {/* Próximas citas */}
       <section className="card-luxury p-6">
         <div className="flex items-center justify-between mb-4">

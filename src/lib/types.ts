@@ -1,5 +1,5 @@
 export type Lang = "PT" | "ES";
-export type AppointmentStatus = "agendada" | "confirmada" | "concluida" | "cancelada" | "reagendada";
+export type AppointmentStatus = "agendada" | "confirmada" | "concluida" | "cancelada" | "reagendada" | "no_show";
 
 export interface Client {
   id: string;
@@ -9,6 +9,15 @@ export interface Client {
   language: Lang;
   notes?: string;
   created_at: string;
+  // Reputação (populados pelo useReputation)
+  total_appointments?: number;
+  total_cancellations?: number;
+  total_no_shows?: number;
+  total_spent?: number;
+  reputation_score?: number;
+  favorite_service_id?: string;
+  last_visit?: string;
+  visit_frequency_days?: number;
 }
 
 export interface Service {

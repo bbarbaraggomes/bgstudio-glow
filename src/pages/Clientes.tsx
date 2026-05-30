@@ -1,7 +1,10 @@
 import { useMemo, useState } from "react";
-import { Plus, Search, Phone, Calendar, Trash2 } from "lucide-react";
+import { useSearchParams } from "react-router-dom";
+import { Plus, Search, Phone, Trash2 } from "lucide-react";
 import { useClients } from "@/lib/hooks/useClients";
 import { useAppointments } from "@/lib/hooks/useAppointments";
+import { useServices } from "@/lib/hooks/useServices";
+import { getClientBadge } from "@/lib/hooks/useReputation";
 import { AppointmentRow, Client, Lang } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,6 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { Progress } from "@/components/ui/progress";
 import { Avatar } from "@/components/Avatar";
 import { eur } from "@/lib/format";
 import { toast } from "sonner";
@@ -18,30 +22,56 @@ import { ptBR } from "date-fns/locale";
 export default function ClientesPage() {
   const { clients, loading, error, createClient, updateClient, deleteClient } = useClients();
   const { appointments } = useAppointments();
+  const { services } = useServices();
   const [q, setQ] = useState("");
   const [sort, setSort] = useState<"name" | "recent" | "spent">("name");
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Client | null>(null);
   const [detail, setDetail] = useState<Client | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const tab = (searchParams.get("tab") || "todas") as "todas" | "melhores" | "noshow";
+
+  const setTab = (t: string) => setSearchParams(t === "todas" ? {} : { tab: t });
+
+  const getScore = (cId: string) => {
+    const ap = appointments.filter((a) => a.client_id === cId);
+    const done = ap.filter((a) => a.status === "concluida").length;
+    const cancelled = ap.filter((a) => a.status === "cancelada").length;
+    const noShows = ap.filter((a) => a.status === "no_show").length;
+    const stored = clients.find((c) => c.id === cId)?.reputation_score;
+    if (stored !== undefined && stored !== null) return stored;
+    return Math.max(0, Math.min(100, 100 + done * 5 - cancelled * 10 - noShows * 25));
+  };
 
   const stats = (cId: string) => {
     const ap = appointments.filter((a) => a.client_id === cId);
     const done = ap.filter((a) => a.status === "concluida");
+    const noShows = ap.filter((a) => a.status === "no_show").length;
     const totalSpent = done.reduce((s, a) => s + (a.services?.price || 0), 0);
     const last = [...ap].sort((a, b) => (a.date < b.date ? 1 : -1))[0];
-    return { count: ap.length, totalSpent, last: last?.date };
+    return { count: ap.length, done: done.length, noShows, totalSpent, last: last?.date };
   };
 
   const list = useMemo(() => {
-    const filtered = clients.filter((c) =>
+    let filtered = clients.filter((c) =>
       [c.name, c.phone, c.email].some((v) => v?.toLowerCase().includes(q.toLowerCase()))
     );
+    if (tab === "melhores") {
+      filtered = filtered.filter((c) => getScore(c.id) >= 60);
+    } else if (tab === "noshow") {
+      filtered = filtered.filter((c) => {
+        const s = stats(c.id);
+        return s.noShows > 0;
+      });
+    }
     return filtered.sort((a, b) => {
       if (sort === "name") return a.name.localeCompare(b.name);
       if (sort === "spent") return stats(b.id).totalSpent - stats(a.id).totalSpent;
+      if (tab === "melhores") return getScore(b.id) - getScore(a.id);
       return (stats(b.id).last || "").localeCompare(stats(a.id).last || "");
     });
-  }, [clients, q, sort, appointments]);
+  }, [clients, q, sort, appointments, tab]);
 
   const openNew = () => { setEditing(null); setOpen(true); };
   const openEdit = (c: Client) => { setEditing(c); setOpen(true); };
@@ -81,6 +111,12 @@ export default function ClientesPage() {
     );
   }
 
+  const tabs = [
+    { key: "todas", label: `Todas (${clients.length})` },
+    { key: "melhores", label: `Melhores (${clients.filter((c) => getScore(c.id) >= 60).length})` },
+    { key: "noshow", label: `Furonas (${clients.filter((c) => stats(c.id).noShows > 0).length})` },
+  ];
+
   return (
     <div className="space-y-6">
       <header className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
@@ -106,9 +142,25 @@ export default function ClientesPage() {
         </Select>
       </div>
 
+      <div className="inline-flex bg-card border border-[hsl(var(--border))] rounded-xl p-1 gap-1">
+        {tabs.map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setTab(t.key)}
+            className={`px-4 py-1.5 text-xs rounded-lg transition-all ${
+              tab === t.key ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
       <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {list.map((c) => {
           const s = stats(c.id);
+          const score = getScore(c.id);
+          const badge = getClientBadge(score);
           return (
             <button
               key={c.id}
@@ -123,7 +175,12 @@ export default function ClientesPage() {
                 </div>
                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-secondary">{c.language}</span>
               </div>
-              <div className="mt-4 pt-4 border-t border-[hsl(var(--border-solid))] grid grid-cols-3 gap-2 text-center">
+              <div className="mt-3">
+                <span className={`inline-flex items-center text-[11px] px-2.5 py-0.5 rounded-full border font-medium ${badge.cls}`}>
+                  {badge.label}
+                </span>
+              </div>
+              <div className="mt-3 pt-3 border-t border-[hsl(var(--border-solid))] grid grid-cols-3 gap-2 text-center">
                 <div>
                   <p className="text-display text-lg leading-none">{s.count}</p>
                   <p className="text-[10px] uppercase text-muted-foreground mt-1">Citas</p>
@@ -146,7 +203,15 @@ export default function ClientesPage() {
       </div>
 
       <ClientDialog open={open} onOpenChange={setOpen} editing={editing} onSave={save} />
-      <ClientDetail client={detail} onClose={() => setDetail(null)} appointments={appointments} onEdit={(c) => { setDetail(null); openEdit(c); }} onDelete={remove} />
+      <ClientDetail
+        client={detail}
+        onClose={() => setDetail(null)}
+        appointments={appointments}
+        services={services}
+        onEdit={(c) => { setDetail(null); openEdit(c); }}
+        onDelete={remove}
+        getScore={getScore}
+      />
     </div>
   );
 }
@@ -211,16 +276,35 @@ function ClientDialog({
 }
 
 function ClientDetail({
-  client, onClose, appointments, onEdit, onDelete,
+  client, onClose, appointments, services, onEdit, onDelete, getScore,
 }: {
   client: Client | null; onClose: () => void; appointments: AppointmentRow[];
-  onEdit: (c: Client) => void; onDelete: (c: Client) => void;
+  services: any[]; onEdit: (c: Client) => void; onDelete: (c: Client) => void;
+  getScore: (id: string) => number;
 }) {
   if (!client) return null;
   const ap = appointments.filter((a) => a.client_id === client.id).sort((a, b) => (a.date < b.date ? 1 : -1));
   const done = ap.filter((a) => a.status === "concluida");
+  const cancelled = ap.filter((a) => a.status === "cancelada").length;
+  const noShows = ap.filter((a) => a.status === "no_show").length;
   const totalSpent = done.reduce((s, a) => s + (a.services?.price || 0), 0);
   const waUrl = `https://wa.me/${client.phone.replace(/\D/g, "")}`;
+  const score = getScore(client.id);
+  const badge = getClientBadge(score);
+
+  const freq: Record<string, number> = {};
+  done.forEach((a) => { if (a.service_id) freq[a.service_id] = (freq[a.service_id] || 0) + 1; });
+  const favServiceId = Object.entries(freq).sort((a, b) => b[1] - a[1])[0]?.[0];
+  const favService = services.find((s) => s.id === favServiceId);
+
+  const doneDates = done.map((a) => a.date).filter(Boolean).sort();
+  let freqDays: number | null = null;
+  if (doneDates.length >= 2) {
+    const diffs = doneDates.slice(1).map((d, i) =>
+      (new Date(d).getTime() - new Date(doneDates[i]).getTime()) / 86400000
+    );
+    freqDays = Math.round(diffs.reduce((a, b) => a + b, 0) / diffs.length);
+  }
 
   return (
     <Dialog open={!!client} onOpenChange={(v) => !v && onClose()}>
@@ -231,23 +315,55 @@ function ClientDetail({
           <div className="flex-1">
             <h3 className="text-display text-2xl">{client.name}</h3>
             <p className="text-sm text-muted-foreground">{client.phone} · {client.language}</p>
+            <span className={`inline-flex items-center text-[11px] px-2.5 py-0.5 rounded-full border font-medium mt-1.5 ${badge.cls}`}>
+              {badge.label}
+            </span>
           </div>
         </div>
 
-        <div className="grid grid-cols-3 gap-3 my-4">
+        <div className="my-3 space-y-1.5">
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-muted-foreground">Reputação</span>
+            <span className="font-medium">{score}/100</span>
+          </div>
+          <Progress value={score} className="h-2" />
+        </div>
+
+        <div className="grid grid-cols-4 gap-2 my-2">
           <div className="p-3 rounded-xl bg-secondary/50 text-center">
-            <p className="text-display text-2xl">{ap.length}</p>
-            <p className="text-[10px] uppercase text-muted-foreground">Citas</p>
+            <p className="text-display text-xl">{done.length}</p>
+            <p className="text-[10px] uppercase text-muted-foreground">Concluídas</p>
           </div>
           <div className="p-3 rounded-xl bg-secondary/50 text-center">
-            <p className="text-display text-2xl">{eur(totalSpent)}</p>
+            <p className="text-display text-xl">{cancelled}</p>
+            <p className="text-[10px] uppercase text-muted-foreground">Canceladas</p>
+          </div>
+          <div className="p-3 rounded-xl bg-secondary/50 text-center">
+            <p className="text-display text-xl text-destructive">{noShows}</p>
+            <p className="text-[10px] uppercase text-muted-foreground">Faltou</p>
+          </div>
+          <div className="p-3 rounded-xl bg-secondary/50 text-center">
+            <p className="text-display text-base mt-0.5">{eur(totalSpent)}</p>
             <p className="text-[10px] uppercase text-muted-foreground">Gasto</p>
           </div>
-          <div className="p-3 rounded-xl bg-secondary/50 text-center">
-            <p className="text-display text-base mt-1">{ap[0] ? format(parseISO(ap[0].date), "dd/MM/yy") : "—"}</p>
-            <p className="text-[10px] uppercase text-muted-foreground">Última</p>
-          </div>
         </div>
+
+        {(favService || freqDays) && (
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            {favService && (
+              <div className="p-3 rounded-xl bg-primary/5 border border-primary/20">
+                <p className="text-muted-foreground mb-0.5">Serviço favorito</p>
+                <p className="font-medium truncate">{favService.name_pt}</p>
+              </div>
+            )}
+            {freqDays && (
+              <div className="p-3 rounded-xl bg-primary/5 border border-primary/20">
+                <p className="text-muted-foreground mb-0.5">Frequência média</p>
+                <p className="font-medium">a cada {freqDays} dias</p>
+              </div>
+            )}
+          </div>
+        )}
 
         {client.notes && (
           <div className="p-3 rounded-lg bg-warning/10 text-xs">
@@ -256,14 +372,14 @@ function ClientDetail({
           </div>
         )}
 
-        <div className="mt-2">
+        <div>
           <p className="text-xs uppercase tracking-wider text-muted-foreground mb-2">Histórico</p>
-          <ul className="max-h-48 overflow-y-auto space-y-1">
+          <ul className="max-h-40 overflow-y-auto space-y-1">
             {ap.length === 0 && <li className="text-sm text-muted-foreground py-3 text-center">Sem histórico</li>}
             {ap.map((a) => (
               <li key={a.id} className="flex justify-between text-xs py-2 border-b border-[hsl(var(--border-solid))]">
                 <span>{format(parseISO(a.date), "dd/MM/yyyy", { locale: ptBR })} · {a.time}</span>
-                <span className="text-muted-foreground capitalize">{a.status}</span>
+                <span className="text-muted-foreground capitalize">{a.status === "no_show" ? "Faltou" : a.status}</span>
                 <span>{eur(a.services?.price || 0)}</span>
               </li>
             ))}

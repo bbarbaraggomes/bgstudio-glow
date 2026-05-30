@@ -15,4 +15,5 @@ export const STATUS_META: Record<string, { label: string; cls: string; dot: stri
   concluida: { label: "Concluída", cls: "bg-primary/15 text-primary border-primary/30", dot: "bg-primary" },
   cancelada: { label: "Cancelada", cls: "bg-destructive/15 text-destructive border-destructive/30", dot: "bg-destructive" },
   reagendada: { label: "Reagendada", cls: "bg-secondary text-foreground border-border", dot: "bg-muted-foreground" },
+  no_show: { label: "Faltou", cls: "bg-destructive/20 text-destructive border-destructive/40", dot: "bg-destructive" },
 };
