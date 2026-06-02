@@ -29,11 +29,11 @@ export function useClients() {
     fetchClients();
   }, [fetchClients]);
 
-  const createClient = async (data: Omit<Client, "id" | "created_at">) => {
-    const { error } = await supabase.from("clients").insert([data]);
-    if (error) { console.error(error); toast.error("Erro ao criar cliente"); return false; }
+  const createClient = async (data: Omit<Client, "id" | "created_at">): Promise<string | false> => {
+    const { data: created, error } = await supabase.from("clients").insert([data]).select("id").single();
+    if (error || !created) { console.error(error); toast.error("Erro ao criar cliente"); return false; }
     await fetchClients();
-    return true;
+    return created.id as string;
   };
 
   const updateClient = async (id: string, data: Partial<Omit<Client, "id" | "created_at">>) => {

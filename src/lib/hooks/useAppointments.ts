@@ -52,6 +52,8 @@ export function useAppointments() {
   };
 
   const deleteAppointment = async (id: string) => {
+    await supabase.from("financial_records").delete().eq("appointment_id", id);
+    await supabase.from("whatsapp_logs").delete().eq("appointment_id", id);
     const { error } = await supabase.from("appointments").delete().eq("id", id);
     if (error) { console.error(error); toast.error("Erro ao remover agendamento"); return false; }
     await fetchAppointments();

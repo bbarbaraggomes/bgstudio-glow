@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { addDays, addMonths, endOfMonth, format, isSameDay, isSameMonth, parseISO, startOfMonth, startOfWeek, subMonths } from "date-fns";
+import { addDays, addMonths, endOfMonth, format, isSameDay, isSameMonth, startOfMonth, startOfWeek, subMonths } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
 import { useAppointments } from "@/lib/hooks/useAppointments";
@@ -9,7 +9,7 @@ import { useFinancial } from "@/lib/hooks/useFinancial";
 import { useSettings } from "@/lib/hooks/useSettings";
 import { useGoogleCalendar } from "@/lib/hooks/useGoogleCalendar";
 import { useReputation } from "@/lib/hooks/useReputation";
-import { Appointment, AppointmentRow, AppointmentStatus, Client, Service } from "@/lib/types";
+import { Appointment, AppointmentRow, AppointmentStatus, Client, Lang, Service } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -19,6 +19,7 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Avatar } from "@/components/Avatar";
+import { ClientSearchCombobox } from "@/components/ClientSearchCombobox";
 import { eur } from "@/lib/format";
 import { toast } from "sonner";
 
@@ -26,7 +27,7 @@ type View = "month" | "week" | "day";
 
 export default function AgendaPage() {
   const { appointments, loading, error, createAppointment, updateAppointment, deleteAppointment } = useAppointments();
-  const { clients, fetchClients } = useClients();
+  const { clients, fetchClients, createClient } = useClients();
   const { activeServices: services } = useServices();
   const { createRecord } = useFinancial();
   const { settings } = useSettings();
@@ -156,7 +157,9 @@ export default function AgendaPage() {
     const ok = await deleteAppointment(a.id);
     if (ok) {
       setOpen(false);
-      toast.success("Cita removida");
+      toast.success("Cita excluída");
+    } else {
+      toast.error("Erro ao excluir cita. Tenta novamente.");
     }
   };
 
@@ -323,6 +326,7 @@ export default function AgendaPage() {
         onSave={saveApt}
         onDelete={removeApt}
         onStatus={setStatus}
+        onCreateClient={createClient}
       />
 
       <CancelReasonDialog
@@ -334,8 +338,14 @@ export default function AgendaPage() {
   );
 }
 
+interface QuickCreate {
+  name: string;
+  phone: string;
+  language: Lang;
+}
+
 function AppointmentDialog({
-  open, onOpenChange, editing, presetDate, clients, services, onSave, onDelete, onStatus,
+  open, onOpenChange, editing, presetDate, clients, services, onSave, onDelete, onStatus, onCreateClient,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
@@ -346,6 +356,7 @@ function AppointmentDialog({
   onSave: (data: Partial<Appointment>) => void;
   onDelete: (a: AppointmentRow) => void;
   onStatus: (a: AppointmentRow, s: AppointmentStatus) => void;
+  onCreateClient: (data: Omit<Client, "id" | "created_at">) => Promise<string | false>;
 }) {
   const [client_id, setClientId] = useState("");
   const [service_id, setServiceId] = useState("");
@@ -353,6 +364,9 @@ function AppointmentDialog({
   const [time, setTime] = useState("10:00");
   const [notes, setNotes] = useState("");
   const [reminder, setReminder] = useState(true);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [quickCreate, setQuickCreate] = useState<QuickCreate | null>(null);
+  const [creating, setCreating] = useState(false);
 
   useMemo(() => {
     if (open) {
@@ -371,6 +385,8 @@ function AppointmentDialog({
         setNotes("");
         setReminder(true);
       }
+      setConfirmDelete(false);
+      setQuickCreate(null);
     }
   }, [open]);
 
@@ -382,6 +398,29 @@ function AppointmentDialog({
     onSave({ client_id, service_id, date, time, notes, reminder_sent: reminder });
   };
 
+  const handleCreateNew = (name: string) => {
+    setQuickCreate({ name, phone: "", language: "ES" });
+  };
+
+  const handleQuickCreateSubmit = async () => {
+    if (!quickCreate?.name || !quickCreate.phone) {
+      toast.error("Nome e telefone obrigatórios");
+      return;
+    }
+    setCreating(true);
+    const newId = await onCreateClient({
+      name: quickCreate.name,
+      phone: quickCreate.phone,
+      language: quickCreate.language,
+    } as Omit<Client, "id" | "created_at">);
+    setCreating(false);
+    if (newId) {
+      setClientId(newId);
+      setQuickCreate(null);
+      toast.success(`Cliente ${quickCreate.name} criada e seleccionada`);
+    }
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg rounded-2xl">
@@ -389,19 +428,78 @@ function AppointmentDialog({
           <DialogTitle className="font-display text-2xl">{editing ? "Editar cita" : "Nova cita"}</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
+
+          {/* Client picker / quick-create form */}
           <div>
             <Label>Cliente</Label>
-            <Select value={client_id} onValueChange={setClientId}>
-              <SelectTrigger className="rounded-lg"><SelectValue placeholder="Selecionar cliente" /></SelectTrigger>
-              <SelectContent>
-                {clients.map((c) => <SelectItem key={c.id} value={c.id}>{c.name} · {c.phone}</SelectItem>)}
-              </SelectContent>
-            </Select>
+            {quickCreate ? (
+              <div className="mt-1.5 p-4 rounded-xl border border-primary/30 bg-primary/5 space-y-3">
+                <p className="text-xs font-medium text-primary">Criar nova cliente</p>
+                <div>
+                  <Label className="text-xs">Nome</Label>
+                  <Input
+                    value={quickCreate.name}
+                    onChange={(e) => setQuickCreate({ ...quickCreate, name: e.target.value })}
+                    className="rounded-lg mt-1"
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs">Telefone WhatsApp</Label>
+                  <Input
+                    placeholder="+34 698 108 173"
+                    value={quickCreate.phone}
+                    onChange={(e) => setQuickCreate({ ...quickCreate, phone: e.target.value })}
+                    className="rounded-lg mt-1"
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs">Idioma</Label>
+                  <Select
+                    value={quickCreate.language}
+                    onValueChange={(v: Lang) => setQuickCreate({ ...quickCreate, language: v })}
+                  >
+                    <SelectTrigger className="rounded-lg mt-1"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="ES">Español</SelectItem>
+                      <SelectItem value="PT">Português (PT-BR)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex gap-2 pt-1">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="rounded-lg"
+                    onClick={() => setQuickCreate(null)}
+                  >
+                    Cancelar
+                  </Button>
+                  <Button
+                    size="sm"
+                    className="rounded-lg flex-1"
+                    onClick={handleQuickCreateSubmit}
+                    disabled={creating}
+                  >
+                    {creating ? "A criar..." : "Criar e seleccionar"}
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="mt-1.5">
+                <ClientSearchCombobox
+                  value={client_id}
+                  onChange={setClientId}
+                  clients={clients}
+                  onCreateNew={handleCreateNew}
+                />
+              </div>
+            )}
           </div>
+
           <div>
             <Label>Serviço</Label>
             <Select value={service_id} onValueChange={setServiceId}>
-              <SelectTrigger className="rounded-lg"><SelectValue placeholder="Selecionar serviço" /></SelectTrigger>
+              <SelectTrigger className="rounded-lg mt-1.5"><SelectValue placeholder="Selecionar serviço" /></SelectTrigger>
               <SelectContent>
                 {services.map((s) => <SelectItem key={s.id} value={s.id}>{s.name_pt} · {s.duration_min}min · {eur(s.price)}</SelectItem>)}
               </SelectContent>
@@ -410,16 +508,16 @@ function AppointmentDialog({
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label>Data</Label>
-              <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="rounded-lg" />
+              <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="rounded-lg mt-1.5" />
             </div>
             <div>
               <Label>Horário</Label>
-              <Input type="time" value={time} onChange={(e) => setTime(e.target.value)} className="rounded-lg" />
+              <Input type="time" value={time} onChange={(e) => setTime(e.target.value)} className="rounded-lg mt-1.5" />
             </div>
           </div>
           <div>
             <Label>Observações</Label>
-            <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className="rounded-lg" />
+            <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className="rounded-lg mt-1.5" />
           </div>
           <div className="flex items-center justify-between p-3 rounded-lg bg-secondary/50">
             <div>
@@ -441,7 +539,19 @@ function AppointmentDialog({
 
           <div className="flex justify-between pt-2">
             {editing ? (
-              <Button variant="ghost" onClick={() => onDelete(editing)} className="text-destructive hover:text-destructive">Excluir</Button>
+              confirmDelete ? (
+                <div className="flex items-center gap-2">
+                  <p className="text-xs text-muted-foreground">Tens a certeza?</p>
+                  <Button size="sm" variant="outline" onClick={() => setConfirmDelete(false)} className="rounded-lg">Não</Button>
+                  <Button size="sm" variant="destructive" onClick={() => { onDelete(editing); setConfirmDelete(false); }} className="rounded-lg">
+                    Excluir
+                  </Button>
+                </div>
+              ) : (
+                <Button variant="ghost" onClick={() => setConfirmDelete(true)} className="text-destructive hover:text-destructive">
+                  Excluir
+                </Button>
+              )
             ) : <span />}
             <div className="flex gap-2">
               <Button variant="outline" onClick={() => onOpenChange(false)} className="rounded-lg">Cancelar</Button>
