@@ -16,7 +16,7 @@ export function useReputation() {
   const updateClientReputation = async (clientId: string): Promise<boolean> => {
     const { data: apts, error: e1 } = await supabase
       .from("appointments")
-      .select("status, date, service_id, services(price)")
+      .select("status, date, service_id, total_price, services(price)")
       .eq("client_id", clientId);
 
     if (e1 || !apts) { console.error(e1); return false; }
@@ -28,7 +28,8 @@ export function useReputation() {
     const total_appointments = done.length;
     const total_cancellations = cancelled.length;
     const total_no_shows = noShows.length;
-    const total_spent = done.reduce((s: number, a: any) => s + (a.services?.price ?? 0), 0);
+    // Prefer total_price (includes extras), fall back to service price for legacy appointments
+    const total_spent = done.reduce((s: number, a: any) => s + (a.total_price ?? a.services?.price ?? 0), 0);
     const reputation_score = Math.max(0, Math.min(100,
       100 + done.length * 5 - cancelled.length * 10 - noShows.length * 25
     ));

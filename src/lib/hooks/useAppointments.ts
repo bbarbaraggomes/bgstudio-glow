@@ -5,6 +5,11 @@ import { Appointment, AppointmentRow } from "@/lib/types";
 
 const normalizeTime = (t: string) => (t?.length > 5 ? t.slice(0, 5) : t);
 
+const FULL_SELECT =
+  "*, clients(name, phone, language), services(name_pt, name_es, duration_min, price), appointment_services(service_id, price, services(name_pt)), appointment_extras(description, price)";
+const BASIC_SELECT =
+  "*, clients(name, phone, language), services(name_pt, name_es, duration_min, price)";
+
 export function useAppointments() {
   const [appointments, setAppointments] = useState<AppointmentRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -12,13 +17,23 @@ export function useAppointments() {
 
   const fetchAppointments = useCallback(async () => {
     setLoading(true);
-    const { data, error } = await supabase
+
+    // Try with appointment_services/appointment_extras — tables may not exist yet in production
+    let { data, error: err } = await supabase
       .from("appointments")
-      .select("*, clients(name, phone, language), services(name_pt, name_es, duration_min, price), appointment_services(service_id, price, services(name_pt)), appointment_extras(description, price)")
-      .order("date")
-      .order("time");
-    if (error) {
-      console.error(error);
+      .select(FULL_SELECT)
+      .order("date");
+
+    if (err) {
+      console.warn("appointment_services/extras unavailable, retrying basic query:", err.message);
+      ({ data, error: err } = await supabase
+        .from("appointments")
+        .select(BASIC_SELECT)
+        .order("date"));
+    }
+
+    if (err) {
+      console.error(err);
       setError("Erro ao carregar agendamentos");
       toast.error("Erro ao carregar agendamentos");
     } else {
@@ -54,6 +69,7 @@ export function useAppointments() {
   const deleteAppointment = async (id: string) => {
     await supabase.from("financial_records").delete().eq("appointment_id", id);
     await supabase.from("whatsapp_logs").delete().eq("appointment_id", id);
+    // appointment_services and appointment_extras are CASCADE deleted by the DB
     const { error } = await supabase.from("appointments").delete().eq("id", id);
     if (error) { console.error(error); toast.error("Erro ao remover agendamento"); return false; }
     await fetchAppointments();
