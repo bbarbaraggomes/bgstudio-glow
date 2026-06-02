@@ -14,7 +14,7 @@ export function useAppointments() {
     setLoading(true);
     const { data, error } = await supabase
       .from("appointments")
-      .select("*, clients(name, phone, language), services(name_pt, name_es, duration_min, price)")
+      .select("*, clients(name, phone, language), services(name_pt, name_es, duration_min, price), appointment_services(service_id, price, services(name_pt)), appointment_extras(description, price)")
       .order("date")
       .order("time");
     if (error) {

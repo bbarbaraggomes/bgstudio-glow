@@ -41,12 +41,30 @@ export interface Appointment {
   reminder_sent: boolean;
   notes?: string;
   google_event_id?: string;
+  total_price?: number;
   created_at?: string;
+}
+
+export interface AppointmentService {
+  id?: string;
+  appointment_id?: string;
+  service_id: string;
+  price: number;
+  services?: { name_pt: string } | null;
+}
+
+export interface AppointmentExtra {
+  id?: string;
+  appointment_id?: string;
+  description: string;
+  price: number;
 }
 
 export interface AppointmentRow extends Appointment {
   clients: { name: string; phone: string; language: Lang } | null;
   services: { name_pt: string; name_es: string; duration_min: number; price: number } | null;
+  appointment_services?: AppointmentService[] | null;
+  appointment_extras?: AppointmentExtra[] | null;
 }
 
 export interface FinancialRecord {

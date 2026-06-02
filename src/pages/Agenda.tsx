@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { addDays, addMonths, endOfMonth, format, isSameDay, isSameMonth, startOfMonth, startOfWeek, subMonths } from "date-fns";
 import { ptBR } from "date-fns/locale";
-import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Plus, X } from "lucide-react";
 import { useAppointments } from "@/lib/hooks/useAppointments";
 import { useClients } from "@/lib/hooks/useClients";
 import { useServices } from "@/lib/hooks/useServices";
@@ -9,6 +9,7 @@ import { useFinancial } from "@/lib/hooks/useFinancial";
 import { useSettings } from "@/lib/hooks/useSettings";
 import { useGoogleCalendar } from "@/lib/hooks/useGoogleCalendar";
 import { useReputation } from "@/lib/hooks/useReputation";
+import { useAppointmentServices } from "@/lib/hooks/useAppointmentServices";
 import { Appointment, AppointmentRow, AppointmentStatus, Client, Lang, Service } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -24,15 +25,30 @@ import { eur } from "@/lib/format";
 import { toast } from "sonner";
 
 type View = "month" | "week" | "day";
+interface SelectedService { service_id: string; price: number; }
+interface ExtraItem { description: string; price: number; }
+
+const aptServiceLabel = (a: AppointmentRow): string => {
+  const list = a.appointment_services;
+  if (list && list.length > 0) {
+    const names = list.map((s) => s.services?.name_pt).filter(Boolean) as string[];
+    if (names.length <= 2) return names.join(" + ");
+    return `${names[0]} + ${names.length - 1} mais`;
+  }
+  return a.services?.name_pt || "—";
+};
+
+const aptTotal = (a: AppointmentRow) => a.total_price ?? a.services?.price ?? 0;
 
 export default function AgendaPage() {
-  const { appointments, loading, error, createAppointment, updateAppointment, deleteAppointment } = useAppointments();
+  const { appointments, loading, error, fetchAppointments, createAppointment, updateAppointment, deleteAppointment } = useAppointments();
   const { clients, fetchClients, createClient } = useClients();
   const { activeServices: services } = useServices();
   const { createRecord } = useFinancial();
   const { settings } = useSettings();
   const { createEvent, deleteEvent } = useGoogleCalendar();
   const { updateClientReputation } = useReputation();
+  const { saveAppointmentServices, saveAppointmentExtras } = useAppointmentServices();
 
   const [cursor, setCursor] = useState(new Date());
   const [view, setView] = useState<View>("month");
@@ -75,29 +91,45 @@ export default function AgendaPage() {
     setOpen(true);
   };
 
-  const saveApt = async (data: Partial<Appointment>) => {
+  const saveApt = async (
+    data: Partial<Appointment>,
+    selectedSvcs: SelectedService[],
+    extraItems: ExtraItem[]
+  ) => {
+    const firstServiceId = selectedSvcs[0]?.service_id ?? "";
+
     if (editing) {
-      const ok = await updateAppointment(editing.id, data);
-      if (ok) toast.success("Cita atualizada");
+      const ok = await updateAppointment(editing.id, { ...data, service_id: firstServiceId });
+      if (ok) {
+        await saveAppointmentServices(editing.id, selectedSvcs);
+        await saveAppointmentExtras(editing.id, extraItems);
+        await fetchAppointments();
+        toast.success("Cita atualizada");
+      }
     } else {
       const newId = await createAppointment({
         client_id: data.client_id!,
-        service_id: data.service_id!,
+        service_id: firstServiceId,
         date: data.date!,
         time: data.time!,
         status: "agendada",
         reminder_sent: data.reminder_sent ?? true,
         notes: data.notes,
+        total_price: data.total_price,
       });
       if (newId) {
+        await saveAppointmentServices(newId, selectedSvcs);
+        await saveAppointmentExtras(newId, extraItems);
+        await fetchAppointments();
+
         if (settings?.google_sync_enabled && settings?.google_calendar_id) {
           const client = clients.find((c) => c.id === data.client_id);
-          const service = services.find((s) => s.id === data.service_id);
-          if (client && service) {
+          const mainService = services.find((s) => s.id === firstServiceId);
+          if (client && mainService) {
             const result = await createEvent(
               { id: newId, date: data.date!, time: data.time!, notes: data.notes },
               client,
-              service,
+              mainService,
               settings.google_calendar_id
             );
             if (result.success && result.eventId) {
@@ -125,10 +157,17 @@ export default function AgendaPage() {
     }
     await updateAppointment(a.id, { status });
     if (status === "concluida") {
+      const aptSvcs = a.appointment_services;
+      const description =
+        aptSvcs && aptSvcs.length > 0
+          ? aptSvcs.map((s) => s.services?.name_pt).filter(Boolean).join(" + ")
+          : a.services?.name_pt || "Serviço";
+      const amount = aptTotal(a);
+
       await createRecord({
         type: "income",
-        amount: a.services?.price || 0,
-        description: a.services?.name_pt || "Serviço",
+        amount,
+        description,
         service_id: a.service_id,
         appointment_id: a.id,
         date: a.date,
@@ -275,7 +314,7 @@ export default function AgendaPage() {
                     {apts.map((a) => (
                       <button key={a.id} onClick={() => openEdit(a)} className="w-full text-left p-2 rounded-lg bg-secondary/60 hover:bg-secondary transition-colors">
                         <p className="text-xs font-medium">{a.time} · {a.clients?.name?.split(" ")[0]}</p>
-                        <p className="text-[10px] text-muted-foreground truncate">{a.services?.name_pt}</p>
+                        <p className="text-[10px] text-muted-foreground truncate">{aptServiceLabel(a)}</p>
                       </button>
                     ))}
                   </div>
@@ -305,7 +344,7 @@ export default function AgendaPage() {
                   <Avatar name={a.clients?.name || "?"} size={42} />
                   <div className="flex-1 min-w-0">
                     <p className="font-medium">{a.clients?.name}</p>
-                    <p className="text-xs text-muted-foreground">{a.services?.name_pt} · {eur(a.services?.price || 0)}</p>
+                    <p className="text-xs text-muted-foreground truncate">{aptServiceLabel(a)} · {eur(aptTotal(a))}</p>
                   </div>
                   <StatusBadge status={a.status} />
                   <Button variant="outline" size="sm" onClick={() => openEdit(a)} className="rounded-lg">Editar</Button>
@@ -353,13 +392,14 @@ function AppointmentDialog({
   presetDate: string | null;
   clients: Client[];
   services: Service[];
-  onSave: (data: Partial<Appointment>) => void;
+  onSave: (data: Partial<Appointment>, svcs: SelectedService[], extras: ExtraItem[]) => void;
   onDelete: (a: AppointmentRow) => void;
   onStatus: (a: AppointmentRow, s: AppointmentStatus) => void;
   onCreateClient: (data: Omit<Client, "id" | "created_at">) => Promise<string | false>;
 }) {
   const [client_id, setClientId] = useState("");
-  const [service_id, setServiceId] = useState("");
+  const [selectedServices, setSelectedServices] = useState<SelectedService[]>([]);
+  const [extras, setExtras] = useState<ExtraItem[]>([]);
   const [date, setDate] = useState("");
   const [time, setTime] = useState("10:00");
   const [notes, setNotes] = useState("");
@@ -372,14 +412,34 @@ function AppointmentDialog({
     if (open) {
       if (editing) {
         setClientId(editing.client_id);
-        setServiceId(editing.service_id);
         setDate(editing.date);
         setTime(editing.time);
         setNotes(editing.notes || "");
         setReminder(editing.reminder_sent);
+
+        // Load services: prefer appointment_services join, fall back to legacy service_id
+        const aptSvcs = editing.appointment_services;
+        if (aptSvcs && aptSvcs.length > 0) {
+          setSelectedServices(aptSvcs.map((s) => ({ service_id: s.service_id, price: s.price })));
+        } else if (editing.service_id) {
+          setSelectedServices([{
+            service_id: editing.service_id,
+            price: editing.total_price ?? editing.services?.price ?? 0,
+          }]);
+        } else {
+          setSelectedServices([]);
+        }
+
+        setExtras(
+          (editing.appointment_extras || []).map((e) => ({
+            description: e.description,
+            price: e.price,
+          }))
+        );
       } else {
         setClientId("");
-        setServiceId("");
+        setSelectedServices([]);
+        setExtras([]);
         setDate(presetDate || format(new Date(), "yyyy-MM-dd"));
         setTime("10:00");
         setNotes("");
@@ -390,12 +450,44 @@ function AppointmentDialog({
     }
   }, [open]);
 
+  const totalPrice = selectedServices.reduce((s, sv) => s + sv.price, 0) +
+    extras.reduce((s, e) => s + e.price, 0);
+
+  const toggleService = (svc: Service) => {
+    const exists = selectedServices.find((s) => s.service_id === svc.id);
+    if (exists) {
+      setSelectedServices((prev) => prev.filter((s) => s.service_id !== svc.id));
+    } else {
+      setSelectedServices((prev) => [...prev, { service_id: svc.id, price: svc.price }]);
+    }
+  };
+
+  const updateServicePrice = (serviceId: string, price: number) => {
+    setSelectedServices((prev) =>
+      prev.map((s) => (s.service_id === serviceId ? { ...s, price } : s))
+    );
+  };
+
+  const addExtra = () => setExtras((prev) => [...prev, { description: "", price: 0 }]);
+  const removeExtra = (idx: number) => setExtras((prev) => prev.filter((_, i) => i !== idx));
+  const updateExtra = (idx: number, field: "description" | "price", value: string | number) => {
+    setExtras((prev) => prev.map((e, i) => (i === idx ? { ...e, [field]: value } : e)));
+  };
+
   const submit = () => {
-    if (!client_id || !service_id || !date || !time) {
-      toast.error("Preencha cliente, serviço, data e horário");
+    if (!client_id || !date || !time) {
+      toast.error("Preencha cliente, data e horário");
       return;
     }
-    onSave({ client_id, service_id, date, time, notes, reminder_sent: reminder });
+    if (selectedServices.length === 0) {
+      toast.error("Seleccione pelo menos um serviço");
+      return;
+    }
+    onSave(
+      { client_id, date, time, notes, reminder_sent: reminder, total_price: totalPrice },
+      selectedServices,
+      extras
+    );
   };
 
   const handleCreateNew = (name: string) => {
@@ -421,15 +513,23 @@ function AppointmentDialog({
     }
   };
 
+  // Group active services by category
+  const grouped = services.reduce((acc, s) => {
+    const cat = s.category || "Outros";
+    if (!acc[cat]) acc[cat] = [];
+    acc[cat].push(s);
+    return acc;
+  }, {} as Record<string, Service[]>);
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg rounded-2xl">
         <DialogHeader>
           <DialogTitle className="font-display text-2xl">{editing ? "Editar cita" : "Nova cita"}</DialogTitle>
         </DialogHeader>
-        <div className="space-y-4">
 
-          {/* Client picker / quick-create form */}
+        <div className="overflow-y-auto pr-1 space-y-4" style={{ maxHeight: "calc(90vh - 10rem)" }}>
+          {/* Client */}
           <div>
             <Label>Cliente</Label>
             {quickCreate ? (
@@ -437,27 +537,15 @@ function AppointmentDialog({
                 <p className="text-xs font-medium text-primary">Criar nova cliente</p>
                 <div>
                   <Label className="text-xs">Nome</Label>
-                  <Input
-                    value={quickCreate.name}
-                    onChange={(e) => setQuickCreate({ ...quickCreate, name: e.target.value })}
-                    className="rounded-lg mt-1"
-                  />
+                  <Input value={quickCreate.name} onChange={(e) => setQuickCreate({ ...quickCreate, name: e.target.value })} className="rounded-lg mt-1" />
                 </div>
                 <div>
                   <Label className="text-xs">Telefone WhatsApp</Label>
-                  <Input
-                    placeholder="+34 698 108 173"
-                    value={quickCreate.phone}
-                    onChange={(e) => setQuickCreate({ ...quickCreate, phone: e.target.value })}
-                    className="rounded-lg mt-1"
-                  />
+                  <Input placeholder="+34 698 108 173" value={quickCreate.phone} onChange={(e) => setQuickCreate({ ...quickCreate, phone: e.target.value })} className="rounded-lg mt-1" />
                 </div>
                 <div>
                   <Label className="text-xs">Idioma</Label>
-                  <Select
-                    value={quickCreate.language}
-                    onValueChange={(v: Lang) => setQuickCreate({ ...quickCreate, language: v })}
-                  >
+                  <Select value={quickCreate.language} onValueChange={(v: Lang) => setQuickCreate({ ...quickCreate, language: v })}>
                     <SelectTrigger className="rounded-lg mt-1"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="ES">Español</SelectItem>
@@ -466,45 +554,142 @@ function AppointmentDialog({
                   </Select>
                 </div>
                 <div className="flex gap-2 pt-1">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="rounded-lg"
-                    onClick={() => setQuickCreate(null)}
-                  >
-                    Cancelar
-                  </Button>
-                  <Button
-                    size="sm"
-                    className="rounded-lg flex-1"
-                    onClick={handleQuickCreateSubmit}
-                    disabled={creating}
-                  >
+                  <Button size="sm" variant="outline" className="rounded-lg" onClick={() => setQuickCreate(null)}>Cancelar</Button>
+                  <Button size="sm" className="rounded-lg flex-1" onClick={handleQuickCreateSubmit} disabled={creating}>
                     {creating ? "A criar..." : "Criar e seleccionar"}
                   </Button>
                 </div>
               </div>
             ) : (
               <div className="mt-1.5">
-                <ClientSearchCombobox
-                  value={client_id}
-                  onChange={setClientId}
-                  clients={clients}
-                  onCreateNew={handleCreateNew}
-                />
+                <ClientSearchCombobox value={client_id} onChange={setClientId} clients={clients} onCreateNew={handleCreateNew} />
               </div>
             )}
           </div>
 
+          {/* Services multi-select */}
           <div>
-            <Label>Serviço</Label>
-            <Select value={service_id} onValueChange={setServiceId}>
-              <SelectTrigger className="rounded-lg mt-1.5"><SelectValue placeholder="Selecionar serviço" /></SelectTrigger>
-              <SelectContent>
-                {services.map((s) => <SelectItem key={s.id} value={s.id}>{s.name_pt} · {s.duration_min}min · {eur(s.price)}</SelectItem>)}
-              </SelectContent>
-            </Select>
+            <Label>Serviços</Label>
+            <div className="mt-1.5 border border-[hsl(var(--border-solid))] rounded-xl overflow-hidden divide-y divide-[hsl(var(--border-solid))] max-h-52 overflow-y-auto">
+              {Object.entries(grouped).map(([cat, catSvcs]) => (
+                <div key={cat}>
+                  <div className="px-3 py-1.5 bg-secondary/60">
+                    <p className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground">{cat}</p>
+                  </div>
+                  {catSvcs.map((svc) => {
+                    const isSelected = selectedServices.some((s) => s.service_id === svc.id);
+                    const selectedSvc = selectedServices.find((s) => s.service_id === svc.id);
+                    return (
+                      <div
+                        key={svc.id}
+                        className={`flex items-center gap-3 px-3 py-2.5 transition-colors ${isSelected ? "bg-primary/5" : "hover:bg-secondary/40"}`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => toggleService(svc)}
+                          className={`w-4 h-4 rounded border-2 shrink-0 flex items-center justify-center transition-colors ${
+                            isSelected ? "bg-primary border-primary" : "border-input hover:border-primary/50"
+                          }`}
+                        >
+                          {isSelected && <Check className="h-2.5 w-2.5 text-primary-foreground" />}
+                        </button>
+                        <span className="flex-1 text-sm cursor-pointer select-none" onClick={() => toggleService(svc)}>
+                          {svc.name_pt}
+                        </span>
+                        {isSelected ? (
+                          <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                            <Input
+                              type="number"
+                              value={selectedSvc!.price}
+                              onChange={(e) => updateServicePrice(svc.id, parseFloat(e.target.value) || 0)}
+                              onFocus={(e) => e.target.select()}
+                              className="w-20 h-7 text-right text-sm rounded-md py-0 px-2"
+                              min={0}
+                              step={0.5}
+                            />
+                            <span className="text-xs text-muted-foreground">€</span>
+                          </div>
+                        ) : (
+                          <span className="text-sm text-muted-foreground w-20 text-right cursor-pointer" onClick={() => toggleService(svc)}>
+                            {eur(svc.price)}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ))}
+              {services.length === 0 && (
+                <div className="px-3 py-6 text-center text-sm text-muted-foreground">Nenhum serviço activo</div>
+              )}
+            </div>
           </div>
+
+          {/* Extras */}
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <Label>Extras / Adicionais</Label>
+              <Button type="button" size="sm" variant="outline" onClick={addExtra} className="rounded-lg h-7 text-xs gap-1">
+                <Plus className="h-3 w-3" /> Adicionar
+              </Button>
+            </div>
+            {extras.length > 0 && (
+              <div className="space-y-2">
+                {extras.map((extra, idx) => (
+                  <div key={idx} className="flex items-center gap-2">
+                    <Input
+                      value={extra.description}
+                      onChange={(e) => updateExtra(idx, "description", e.target.value)}
+                      placeholder="Descrição do extra"
+                      className="flex-1 rounded-lg h-9 text-sm"
+                    />
+                    <Input
+                      type="number"
+                      value={extra.price || ""}
+                      onChange={(e) => updateExtra(idx, "price", parseFloat(e.target.value) || 0)}
+                      onFocus={(e) => e.target.select()}
+                      placeholder="0"
+                      className="w-20 rounded-lg h-9 text-sm text-right"
+                      min={0}
+                      step={0.5}
+                    />
+                    <span className="text-xs text-muted-foreground shrink-0">€</span>
+                    <Button type="button" size="icon" variant="ghost" onClick={() => removeExtra(idx)} className="h-9 w-9 rounded-lg text-muted-foreground hover:text-destructive shrink-0">
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Total summary */}
+          {(selectedServices.length > 0 || extras.some((e) => e.description || e.price > 0)) && (
+            <div className="rounded-xl border border-[hsl(var(--border-solid))] overflow-hidden text-sm">
+              {selectedServices.map((s) => {
+                const svc = services.find((sv) => sv.id === s.service_id);
+                if (!svc) return null;
+                return (
+                  <div key={s.service_id} className="flex items-center justify-between px-4 py-2 border-b border-[hsl(var(--border-solid))]">
+                    <span className="text-muted-foreground truncate flex-1 mr-2">{svc.name_pt}</span>
+                    <span className="shrink-0 font-medium tabular-nums">{eur(s.price)}</span>
+                  </div>
+                );
+              })}
+              {extras.filter((e) => e.description || e.price > 0).map((e, i) => (
+                <div key={`x${i}`} className="flex items-center justify-between px-4 py-2 border-b border-[hsl(var(--border-solid))]">
+                  <span className="text-muted-foreground truncate flex-1 mr-2">{e.description || "Extra"} ✨</span>
+                  <span className="shrink-0 font-medium tabular-nums">{eur(e.price)}</span>
+                </div>
+              ))}
+              <div className="flex items-center justify-between px-4 py-3 bg-primary/5 font-semibold">
+                <span>Total</span>
+                <span className="text-primary tabular-nums">{eur(totalPrice)}</span>
+              </div>
+            </div>
+          )}
+
+          {/* Date / Time */}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label>Data</Label>
@@ -515,10 +700,14 @@ function AppointmentDialog({
               <Input type="time" value={time} onChange={(e) => setTime(e.target.value)} className="rounded-lg mt-1.5" />
             </div>
           </div>
+
+          {/* Notes */}
           <div>
             <Label>Observações</Label>
             <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className="rounded-lg mt-1.5" />
           </div>
+
+          {/* Reminder */}
           <div className="flex items-center justify-between p-3 rounded-lg bg-secondary/50">
             <div>
               <Label className="cursor-pointer">Lembrete WhatsApp 24h antes</Label>
@@ -527,6 +716,7 @@ function AppointmentDialog({
             <Switch checked={reminder} onCheckedChange={setReminder} />
           </div>
 
+          {/* Status buttons */}
           {editing && (
             <div className="flex flex-wrap gap-2 pt-2 border-t border-[hsl(var(--border-solid))]">
               {(["confirmada", "concluida", "cancelada", "reagendada"] as AppointmentStatus[]).map((s) => (
@@ -536,27 +726,28 @@ function AppointmentDialog({
               ))}
             </div>
           )}
+        </div>
 
-          <div className="flex justify-between pt-2">
-            {editing ? (
-              confirmDelete ? (
-                <div className="flex items-center gap-2">
-                  <p className="text-xs text-muted-foreground">Tens a certeza?</p>
-                  <Button size="sm" variant="outline" onClick={() => setConfirmDelete(false)} className="rounded-lg">Não</Button>
-                  <Button size="sm" variant="destructive" onClick={() => { onDelete(editing); setConfirmDelete(false); }} className="rounded-lg">
-                    Excluir
-                  </Button>
-                </div>
-              ) : (
-                <Button variant="ghost" onClick={() => setConfirmDelete(true)} className="text-destructive hover:text-destructive">
+        {/* Footer buttons */}
+        <div className="flex justify-between pt-3 border-t border-[hsl(var(--border-solid))] mt-1">
+          {editing ? (
+            confirmDelete ? (
+              <div className="flex items-center gap-2">
+                <p className="text-xs text-muted-foreground">Tens a certeza?</p>
+                <Button size="sm" variant="outline" onClick={() => setConfirmDelete(false)} className="rounded-lg">Não</Button>
+                <Button size="sm" variant="destructive" onClick={() => { onDelete(editing); setConfirmDelete(false); }} className="rounded-lg">
                   Excluir
                 </Button>
-              )
-            ) : <span />}
-            <div className="flex gap-2">
-              <Button variant="outline" onClick={() => onOpenChange(false)} className="rounded-lg">Cancelar</Button>
-              <Button onClick={submit} className="rounded-lg">{editing ? "Salvar" : "Criar cita"}</Button>
-            </div>
+              </div>
+            ) : (
+              <Button variant="ghost" onClick={() => setConfirmDelete(true)} className="text-destructive hover:text-destructive">
+                Excluir
+              </Button>
+            )
+          ) : <span />}
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => onOpenChange(false)} className="rounded-lg">Cancelar</Button>
+            <Button onClick={submit} className="rounded-lg">{editing ? "Salvar" : "Criar cita"}</Button>
           </div>
         </div>
       </DialogContent>
@@ -579,25 +770,17 @@ function CancelReasonDialog({
           <DialogTitle className="font-display text-xl">Motivo do cancelamento</DialogTitle>
         </DialogHeader>
         <p className="text-sm text-muted-foreground mb-4">
-          {apt.clients?.name} · {apt.services?.name_pt} · {apt.date}
+          {apt.clients?.name} · {aptServiceLabel(apt)} · {apt.date}
         </p>
         <div className="space-y-3">
-          <Button
-            className="w-full rounded-xl justify-start gap-3 h-auto py-4"
-            variant="outline"
-            onClick={() => onConfirm(apt, true)}
-          >
+          <Button className="w-full rounded-xl justify-start gap-3 h-auto py-4" variant="outline" onClick={() => onConfirm(apt, true)}>
             <span className="text-xl">📱</span>
             <div className="text-left">
               <p className="font-medium">Cancelou com aviso</p>
               <p className="text-xs text-muted-foreground">Pontuação: −10 pontos</p>
             </div>
           </Button>
-          <Button
-            className="w-full rounded-xl justify-start gap-3 h-auto py-4 border-destructive/40 text-destructive hover:bg-destructive/5"
-            variant="outline"
-            onClick={() => onConfirm(apt, false)}
-          >
+          <Button className="w-full rounded-xl justify-start gap-3 h-auto py-4 border-destructive/40 text-destructive hover:bg-destructive/5" variant="outline" onClick={() => onConfirm(apt, false)}>
             <span className="text-xl">❌</span>
             <div className="text-left">
               <p className="font-medium">Faltou sem avisar</p>
